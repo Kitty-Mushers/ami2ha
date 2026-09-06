@@ -423,21 +423,33 @@ that work rather than fail.
   off reports no brightness at all, and showing 0% would say someone had
   dimmed it right down, which is a different thing.
 
-  @{b}color@{ub} gives an RGB light red, green and blue with a preview:
+  @{b}color@{ub} gives an RGB light a colour wheel:
 
     group "Farbe"
         color light.strip label "LED Strip"
     end
 
+  It is MUI's own colour gadget: the wheel picks hue and saturation in one
+  gesture, the strip down its right-hand side is brightness, and the
+  Red/Green/Blue boxes beside it take exact numbers. So one row controls a
+  colour lamp completely -- there is no need for a separate
+  @{b}dimmer@{ub} row beside it.
+
   It is greyed out until the light is on and reports a colour. That is
   deliberate: an off lamp has no colour to show, and a control that made
   one up would send it the moment the window opened -- which it did, once,
-  turning a lamp on at full white before anyone had touched anything.
+  turning a lamp on at full white before anyone had touched anything. The
+  @{"on/off box" link LIGHTS} sits outside the greyed part, so an off lamp
+  can still be switched on.
 
-  It is also a tall gadget, three sliders and a swatch, so a colour light
-  is a taller row than a lamp. And it asks the screen for a pen to draw
-  the preview, which is worth knowing on a 256-colour Workbench where pens
-  are a finite resource.
+  It is a tall gadget, so a colour light is a taller row than a lamp, and
+  it asks the screen for pens, which is worth knowing on a 256-colour
+  Workbench where pens are a finite resource.
+
+  One wart worth knowing: while the lamp is off, the wheel shows a colour
+  of its own choosing rather than nothing. It cannot act on it -- the
+  control is disabled until the lamp reports a real colour -- but it does
+  look like a setting when it is not one.
 
   @{b}cover@{ub} is a blind, shutter or awning:
 

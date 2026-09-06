@@ -235,14 +235,6 @@ typedef struct {
      */
     Object *cover_btn[COVER_ACTIONS];
     /*
-     * Colour. Three sliders of our own rather than a Coloradjust: that
-     * class draws a colour wheel with a gradient slider beside it whose
-     * size is entirely its own business, and at dashboard scale that
-     * slider is too small to hit. These are the same sliders a dimmer
-     * uses, so a colour light reads like the rest of the window.
-     */
-    Object *rgb[3];
-    Object *swatch;
     /*
      * On/off for a dimmer or a colour light. Deliberately outside the part
      * that greys out: a lamp that is off reports no colour, so the colour
@@ -392,6 +384,16 @@ static long gauge_position(const a2h_widget *w, const ha_entity *e)
  * ------------------------------------------------------------------ */
 
 /* The same checkmark a toggle uses, kept its natural size. */
+/* Read a Coloradjust back, packed the same way `shown` is. */
+static int ca_packed(Object *o)
+{
+    int r = (int)((ULONG)xget(o, MUIA_Coloradjust_Red)   >> 24);
+    int g = (int)((ULONG)xget(o, MUIA_Coloradjust_Green) >> 24);
+    int b = (int)((ULONG)xget(o, MUIA_Coloradjust_Blue)  >> 24);
+
+    return (r << 16) | (g << 8) | b;
+}
+
 static Object *make_onoff(void)
 {
     return MUI_NewObject(MUIC_Image,
@@ -520,64 +522,35 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
 
     case W_COLOR: {
         /*
-         * Built from three sliders and a swatch rather than using
-         * Coloradjust. That class puts a colour wheel and a gradient
-         * slider in the row, and the gradient slider is a few pixels wide
-         * -- fiddly to hit with a mouse and impossible to make bigger,
-         * since its size is internal to the class. These are the same
-         * sliders a dimmer uses.
+         * Coloradjust, MUI's own colour class. One composite gadget: the
+         * wheel, a brightness strip down its right-hand side, and its own
+         * Red/Green/Blue entry boxes. Nothing is added on top of it, which
+         * is why there is no separate swatch -- it previews itself.
          *
-         * Disabled lives on the enclosing group, which MUI passes down to
-         * the children, so the whole control greys out together until the
-         * light reports a colour.
+         * This replaced three plain sliders and a Colorfield, which is
+         * worth knowing before anyone changes it back. The sliders were
+         * built precisely because that brightness strip is about ten
+         * pixels wide and cannot be made wider -- its size is internal to
+         * the class. Both were then run side by side on a 4000T, and the
+         * wheel won on two counts: hue and saturation are picked in one
+         * gesture rather than three, and the strip is a brightness axis,
+         * so one row controls a colour lamp completely. The slider version
+         * had no brightness at all, which meant a colour strip wanted a
+         * second `dimmer` row beside it to be usable.
+         *
+         * Disabled to start: an off lamp reports no colour, and a control
+         * that invented one would send it the moment the window opened --
+         * which it did, once, turning a lamp on at full white.
          */
-        static const char *const gun[3] = { "R", "G", "B" };
-        Object *rows;
-        int     c;
-
-        rows = MUI_NewObject(MUIC_Group, TAG_DONE);
-        if (!rows)
-            return 0;
-        for (c = 0; c < 3; c++) {
-            Object *row;
-
-            uw->rgb[c] = MUI_NewObject(MUIC_Slider,
-                MUIA_Slider_Min,   (IPTR)0,
-                MUIA_Slider_Max,   (IPTR)255,
-                MUIA_Slider_Level, (IPTR)0,
-                TAG_DONE);
-            row = MUI_NewObject(MUIC_Group,
-                MUIA_Group_Horiz, TRUE,
-                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                    MUIA_Text_Contents, (IPTR)gun[c],
-                    MUIA_Weight,        (IPTR)0,
-                    TAG_DONE),
-                MUIA_Group_Child, (IPTR)uw->rgb[c],
-                TAG_DONE);
-            if (!uw->rgb[c] || !row)
-                return 0;
-            DoMethod(rows, OM_ADDMEMBER, (IPTR)row);
-        }
-
-        /* The preview. This is the one pen the control asks the screen
-         * for, which is worth knowing on a 256-colour Workbench. */
-        uw->swatch = MUI_NewObject(MUIC_Colorfield,
-            MUIA_Frame,       MUIV_Frame_ImageButton,
-            MUIA_FixWidth,    (IPTR)28,
+        uw->control = MUI_NewObject(MUIC_Coloradjust,
+            MUIA_Disabled, TRUE,
             TAG_DONE);
-        if (!uw->swatch)
-            return 0;
-
-        uw->control = MUI_NewObject(MUIC_Group,
-            MUIA_Group_Horiz, TRUE,
-            MUIA_Disabled,    TRUE,
-            MUIA_Group_Child, (IPTR)uw->swatch,
-            MUIA_Group_Child, (IPTR)rows,
-            TAG_DONE);
-        uw->onoff = make_onoff();
+        uw->onoff  = make_onoff();
         if (!uw->control || !uw->onoff)
             return 0;
 
+        /* The box sits outside the control, so a lamp that is off -- and
+         * therefore greyed out -- can still be switched on. */
         DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
         DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Group,
             MUIA_Group_Horiz, TRUE,
@@ -1589,7 +1562,6 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
          */
         if (uw->control && ha_attr_rgb(e, "rgb_color", &r, &g, &b)) {
             int packed = (r << 16) | (g << 8) | b;
-            int gun[3], c;
 
             if (!uw->armed) {
                 uw->armed = ui_now() + SETTLE_TICKS * 2;
@@ -1598,31 +1570,19 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
             if (packed == uw->shown)
                 break;                      /* nothing changed; see above */
 
-            gun[0] = r; gun[1] = g; gun[2] = b;
-            for (c = 0; c < 3; c++)
-                if (uw->rgb[c])
-                    SetAttrs(uw->rgb[c],
-                        MUIA_NoNotify,     TRUE,
-                        MUIA_Slider_Level, (IPTR)gun[c],
-                        TAG_DONE);
-
-            /* What they actually took, for the same reason as the dimmer. */
-            uw->shown = 0;
-            for (c = 0; c < 3; c++)
-                uw->shown = (uw->shown << 8) |
-                            (uw->rgb[c] ? (int)xget(uw->rgb[c], MUIA_Slider_Level)
-                                        : 0);
-            uw->armed = ui_now() + SETTLE_TICKS * 2;
-
-            /* A Colorfield gun is 32 bits and the wire carries 8, and the
-             * conversion has to fill the whole word: 0xFF becomes
+            /* A Coloradjust gun is 32 bits and the wire carries 8, and
+             * the conversion has to fill the whole word: 0xFF becomes
              * 0xFFFFFFFF, not 0xFF000000, or white comes out grey. */
-            if (uw->swatch)
-                SetAttrs(uw->swatch,
-                    MUIA_Colorfield_Red,   (IPTR)((ULONG)r * 0x01010101UL),
-                    MUIA_Colorfield_Green, (IPTR)((ULONG)g * 0x01010101UL),
-                    MUIA_Colorfield_Blue,  (IPTR)((ULONG)b * 0x01010101UL),
-                    TAG_DONE);
+            SetAttrs(uw->control,
+                MUIA_NoNotify,          TRUE,
+                MUIA_Coloradjust_Red,   (IPTR)((ULONG)r * 0x01010101UL),
+                MUIA_Coloradjust_Green, (IPTR)((ULONG)g * 0x01010101UL),
+                MUIA_Coloradjust_Blue,  (IPTR)((ULONG)b * 0x01010101UL),
+                TAG_DONE);
+
+            /* What it actually took, for the same reason as the dimmer. */
+            uw->shown = ca_packed(uw->control);
+            uw->armed = ui_now() + SETTLE_TICKS * 2;
         } else if (uw->control && !uw->armed) {
             set(uw->control, MUIA_Disabled, TRUE);
         }
@@ -2088,6 +2048,26 @@ static long pending_tick(a2h_ui *ui)
          * of a second after a write is the gadget catching up, not a
          * person.
          */
+        /*
+         * While that window is open, follow the gadget instead of judging
+         * it. Coloradjust needs this and a slider does not: it keeps hue
+         * and brightness rather than three guns, so a colour handed to it
+         * comes back as the nearest one it can represent -- and not
+         * always on the same pass as the write. Reading it once and
+         * remembering that was not enough. The strip was set to
+         * [255,120,0], the gadget settled on [255,120,118] a moment
+         * later, the next poll read the difference as a hand on the
+         * wheel, and sent it to the lamp: the light really did change
+         * colour on its own, exactly the fault the plain sliders were
+         * brought in to end.
+         *
+         * So absorb whatever it settles on. Anything after the window is
+         * a person.
+         */
+        if (uw->armed && now < uw->armed && uw->control &&
+            w->kind == W_COLOR)
+            uw->shown = ca_packed(uw->control);
+
         if (uw->armed && now >= uw->armed && uw->control &&
             (w->kind == W_DIMMER || w->kind == W_COLOR)) {
             int now_val;
@@ -2095,10 +2075,7 @@ static long pending_tick(a2h_ui *ui)
             if (w->kind == W_DIMMER) {
                 now_val = (int)xget(uw->control, MUIA_Slider_Level);
             } else {
-                int r = uw->rgb[0] ? (int)xget(uw->rgb[0], MUIA_Slider_Level) : 0;
-                int g = uw->rgb[1] ? (int)xget(uw->rgb[1], MUIA_Slider_Level) : 0;
-                int b = uw->rgb[2] ? (int)xget(uw->rgb[2], MUIA_Slider_Level) : 0;
-                now_val = (r << 16) | (g << 8) | b;
+                now_val = ca_packed(uw->control);
             }
 
             if (now_val != uw->shown) {
@@ -2106,18 +2083,6 @@ static long pending_tick(a2h_ui *ui)
                 uw->pending = now_val;
                 uw->send_at = now + SETTLE_TICKS;
                 uw->hold    = now + SETTLE_TICKS * 4;
-                if (w->kind == W_COLOR && uw->swatch) {
-                    /* So the preview follows the sliders as they move,
-                     * rather than waiting for the lamp to answer. */
-                    SetAttrs(uw->swatch,
-                        MUIA_Colorfield_Red,
-                            (IPTR)((ULONG)((now_val >> 16) & 0xFF) * 0x01010101UL),
-                        MUIA_Colorfield_Green,
-                            (IPTR)((ULONG)((now_val >> 8) & 0xFF) * 0x01010101UL),
-                        MUIA_Colorfield_Blue,
-                            (IPTR)((ULONG)(now_val & 0xFF) * 0x01010101UL),
-                        TAG_DONE);
-                }
             }
         }
 

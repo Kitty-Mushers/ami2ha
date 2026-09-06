@@ -214,7 +214,9 @@ Widget kinds are `sensor`, `toggle`, `gauge`, `button`, `text`, `camera`,
 `media`, `dimmer`, `color` and `cover`.
 
 A `dimmer` puts a light's brightness on a slider, a `color` gives an RGB light
-red, green and blue, and a `cover` drives a blind or shutter:
+a colour wheel — hue and saturation on the wheel, brightness on the strip
+beside it, and exact numbers in the R/G/B boxes, so one row is the whole lamp
+— and a `cover` drives a blind or shutter:
 
 ```
 group "Licht"

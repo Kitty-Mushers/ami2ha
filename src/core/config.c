@@ -710,11 +710,11 @@ void cfg_refine_kinds(a2h_config *cfg, ha_store *store)
             continue;
 
         /*
-         * Colour before brightness: a colour control carries its own on/off
-         * box, so nothing is lost, and a strip that can do colour is
-         * overwhelmingly wanted for colour. A lamp that only dims gets the
-         * slider. One that can do neither stays a checkmark, which is still
-         * the right answer for most bulbs.
+         * Colour before brightness, and nothing is given up by it: the
+         * colour wheel carries a brightness strip and its own on/off box,
+         * so one row is the whole lamp. A lamp that only dims gets the
+         * slider. One that can do neither stays a checkmark, which is
+         * still the right answer for most bulbs.
          */
         if (e->light_caps & HA_LIGHT_RGB)
             w->kind = W_COLOR;
