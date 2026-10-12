@@ -603,11 +603,19 @@ without dropping the connection, and the status line says what it found:
 
 They are not put on the dashboard for you -- a layout you arranged stays
 as you left it. Open Settings and they are waiting in the list of
-available entities. The note also counts anything the dashboard shows
-that the label no longer names. The ARexx command REFRESH does the same.
+available entities. If something lost the label since ami2ha last asked,
+the note adds how many, as in "1 new labelled entity, 1 gone". The ARexx
+command REFRESH does the same.
 
-  @{b}Group@{ub}       which group you are editing. New group and Delete
-                group work on this one; Name renames it.
+  @{b}Group@{ub}       which group you are editing, numbered in the order
+                they appear -- and with more than one column, which
+                column each lands in. New group and Delete group work on
+                this one; Name renames it.
+
+  @{b}Move up, Move down@{ub}  move the group on show one place earlier or
+                later, its entities with it. Earlier means higher up its
+                column. The numbers in the Group list change as you click,
+                so you can see where it has got to before pressing Use.
 
   @{b}Available HA entities@{ub}  everything the server offers that is not
                 on the dashboard yet.

@@ -34,6 +34,7 @@ struct a2h_editor {
     Object *lv_used, *list_used;
     Object *cyc_group, *list_kind;
     Object *bt_add, *bt_remove, *bt_gnew, *bt_gdel;
+    Object *bt_gup, *bt_gdown;   /* the group's place in the order */
     Object *bt_up, *bt_down;
     Object *str_group, *str_label, *str_min, *str_max;
     /* Camera only, and the dashboard-wide column count. */
@@ -55,6 +56,7 @@ struct a2h_editor {
     int     group;        /* which group is being edited */
 
     const char **group_titles;   /* for the cycle gadget, NULL terminated */
+    char        *group_labels;   /* what those point at: "2. Name (column 1)" */
     int          ngroup_titles;
 
     /*
@@ -310,6 +312,8 @@ static void show_group_name(a2h_editor *ed)
     }
 }
 
+static void refresh_groups(a2h_editor *ed);
+
 static void set_group_column(a2h_editor *ed)
 {
     LONG col = 0;
@@ -318,6 +322,7 @@ static void set_group_column(a2h_editor *ed)
         return;
     get(ed->cyc_gcolumn, MUIA_Cycle_Active, &col);
     ed->cfg->groups[ed->group].column = (int)col;   /* 0 is Auto */
+    refresh_groups(ed);   /* where everything lands may have changed */
 }
 
 static void refresh_lists(a2h_editor *ed)
@@ -333,18 +338,54 @@ static void refresh_lists(a2h_editor *ed)
     show_properties(ed);
 }
 
+/* Room for "32. " + a title + " (column 8)". */
+#define GROUP_LABEL_MAX (CFG_TITLE_MAX + 20)
+
 static void refresh_groups(a2h_editor *ed)
 {
-    int i;
+    int  i, ncols, saved;
+    int  col_of[CFG_MAX_GROUPS];
+    LONG cyc = 0;
 
     free(ed->group_titles);
+    free(ed->group_labels);
+    ed->group_labels = NULL;
     ed->group_titles = (const char **)calloc((size_t)ed->cfg->ngroups + 2,
                                              sizeof *ed->group_titles);
     if (!ed->group_titles)
         return;
 
-    for (i = 0; i < ed->cfg->ngroups; i++)
-        ed->group_titles[i] = ed->cfg->groups[i].title;
+    /*
+     * Each entry says where its group is: its place in the order, and with
+     * more than one column, the column it lands in. Without that, Move up
+     * meant pressing Use after every click to count how far it had got.
+     * The column is worked out as the dashboard will do it, from the count
+     * the Columns gadget shows now rather than the one last applied.
+     */
+    get(ed->cyc_columns, MUIA_Cycle_Active, &cyc);
+    saved = ed->cfg->columns;
+    ed->cfg->columns = (int)cyc + 1;
+    ncols = ed->cfg->columns;
+    cfg_place_groups(ed->cfg, col_of);
+    ed->cfg->columns = saved;
+
+    ed->group_labels = (char *)malloc((size_t)ed->cfg->ngroups *
+                                      GROUP_LABEL_MAX + 1);
+    for (i = 0; i < ed->cfg->ngroups; i++) {
+        char *l;
+
+        if (!ed->group_labels) {           /* plain titles will have to do */
+            ed->group_titles[i] = ed->cfg->groups[i].title;
+            continue;
+        }
+        l = ed->group_labels + (size_t)i * GROUP_LABEL_MAX;
+        if (ncols > 1)
+            sprintf(l, "%d. %s (column %d)", i + 1,
+                    ed->cfg->groups[i].title, col_of[i] + 1);
+        else
+            sprintf(l, "%d. %s", i + 1, ed->cfg->groups[i].title);
+        ed->group_titles[i] = l;
+    }
     if (ed->cfg->ngroups == 0)
         ed->group_titles[0] = "(no groups)";
     ed->ngroup_titles = ed->cfg->ngroups ? ed->cfg->ngroups : 1;
@@ -650,6 +691,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     ed->bt_remove = make_button("<< Remove");
     ed->bt_gnew   = make_button("New group");
     ed->bt_gdel   = make_button("Delete group");
+    ed->bt_gup    = make_button("Move up");
+    ed->bt_gdown  = make_button("Move down");
     ed->bt_save   = make_button("Save");
     ed->bt_use    = make_button("Use");
     ed->bt_cancel = make_button("Cancel");
@@ -685,12 +728,10 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                 MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                     MUIA_Group_Horiz, TRUE,
                     MUIA_Group_Child, (IPTR)ed->cyc_group,
+                    MUIA_Group_Child, (IPTR)ed->bt_gup,
+                    MUIA_Group_Child, (IPTR)ed->bt_gdown,
                     MUIA_Group_Child, (IPTR)ed->bt_gnew,
                     MUIA_Group_Child, (IPTR)ed->bt_gdel,
-                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                        MUIA_Text_Contents, (IPTR)"Columns:",
-                        MUIA_Weight, (IPTR)0, TAG_DONE),
-                    MUIA_Group_Child, (IPTR)ed->cyc_columns,
                     TAG_DONE),
                 MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                     MUIA_Group_Horiz, TRUE,
@@ -702,6 +743,12 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                         MUIA_Text_Contents, (IPTR)"In column:",
                         MUIA_Weight, (IPTR)0, TAG_DONE),
                     MUIA_Group_Child, (IPTR)ed->cyc_gcolumn,
+                    /* Dashboard-wide, but it sits by "In column" because
+                     * the two are read together: column 2 of 3. */
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                        MUIA_Text_Contents, (IPTR)"Columns:",
+                        MUIA_Weight, (IPTR)0, TAG_DONE),
+                    MUIA_Group_Child, (IPTR)ed->cyc_columns,
                     TAG_DONE),
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
@@ -801,6 +848,10 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_NEW);
     DoMethod(ed->bt_gdel, MUIM_Notify, MUIA_Pressed, FALSE,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_DEL);
+    DoMethod(ed->bt_gup, MUIM_Notify, MUIA_Pressed, FALSE,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_UP);
+    DoMethod(ed->bt_gdown, MUIM_Notify, MUIA_Pressed, FALSE,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_DN);
     DoMethod(ed->bt_up, MUIM_Notify, MUIA_Pressed, FALSE,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_UP);
     DoMethod(ed->bt_down, MUIM_Notify, MUIA_Pressed, FALSE,
@@ -821,6 +872,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RENAME);
     DoMethod(ed->cyc_gcolumn, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_COL);
+    DoMethod(ed->cyc_columns, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_COLUMNS);
     DoMethod(ed->str_label, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_LABEL);
     DoMethod(ed->str_min, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
@@ -852,6 +905,7 @@ void editor_dispose(a2h_editor *ed)
     free(ed->used);
     free(ed->stash);
     free(ed->group_titles);
+    free(ed->group_labels);
     cfg_free(&ed->backup);
     free(ed);
 }
@@ -1022,6 +1076,28 @@ static void group_delete(a2h_editor *ed)
     if (ed->group >= cfg->ngroups)
         ed->group = cfg->ngroups ? cfg->ngroups - 1 : 0;
 
+    refresh_groups(ed);
+    refresh_lists(ed);
+}
+
+/*
+ * Move the group on show one place earlier or later. Its widgets travel
+ * with it, so the lists below do not change -- only the cycle's order and
+ * which entry in it is this group.
+ */
+static void group_move(a2h_editor *ed, int delta)
+{
+    int to;
+
+    if (ed->group < 0 || ed->group >= ed->cfg->ngroups)
+        return;
+
+    apply(ed);   /* bank the list edits against the group as it stands */
+
+    to = cfg_move_group(ed->cfg, ed->group, delta);
+    if (to < 0)
+        return;
+    ed->group = to;
     refresh_groups(ed);
     refresh_lists(ed);
 }
@@ -1366,6 +1442,20 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
 
     case ID_ED_GROUP_COL:
         set_group_column(ed);
+        break;
+
+    /* The count itself is read on apply; this only re-labels the groups
+     * with the columns they would land in. */
+    case ID_ED_COLUMNS:
+        refresh_groups(ed);
+        break;
+
+    case ID_ED_GROUP_UP:
+        group_move(ed, -1);
+        break;
+
+    case ID_ED_GROUP_DN:
+        group_move(ed, 1);
         break;
 
     /* Return in the label, min or max gadget. The commit above already

@@ -33,7 +33,10 @@ typedef struct a2h_editor a2h_editor;
 #define ID_ED_LABEL     (ID_ED_BASE + 14)
 #define ID_ED_RANGE     (ID_ED_BASE + 15)
 #define ID_ED_GROUP_COL (ID_ED_BASE + 16)
-#define ID_ED_LAST      (ID_ED_BASE + 16)
+#define ID_ED_GROUP_UP  (ID_ED_BASE + 17)
+#define ID_ED_GROUP_DN  (ID_ED_BASE + 18)
+#define ID_ED_COLUMNS   (ID_ED_BASE + 19)
+#define ID_ED_LAST      (ID_ED_BASE + 19)
 
 /*
  * `cfg` is edited in place when the user applies; a copy is kept so Cancel

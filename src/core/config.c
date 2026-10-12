@@ -83,6 +83,55 @@ static int widget_rows(const a2h_widget *w)
     }
 }
 
+static void reverse_widgets(a2h_widget *w, int from, int to)   /* [from,to) */
+{
+    while (from < --to) {
+        a2h_widget t = w[from];
+        w[from++] = w[to];
+        w[to]     = t;
+    }
+}
+
+int cfg_move_group(a2h_config *cfg, int g, int delta)
+{
+    a2h_group  t;
+    int        a, b, start, na, nb, i;
+
+    if (delta != -1 && delta != 1)
+        return -1;
+    if (g < 0 || g >= cfg->ngroups || g + delta < 0 ||
+        g + delta >= cfg->ngroups)
+        return -1;
+
+    a = delta < 0 ? g - 1 : g;   /* the earlier of the two */
+    b = a + 1;
+    start = cfg->groups[a].first_widget;
+    na    = cfg->groups[a].nwidgets;
+    nb    = cfg->groups[b].nwidgets;
+
+    /*
+     * The widgets are stored group after group, so the two blocks trade
+     * places: [A][B] becomes [B][A]. Three reversals do that in place,
+     * which matters with a widget the size this one is.
+     */
+    reverse_widgets(cfg->widgets, start, start + na);
+    reverse_widgets(cfg->widgets, start + na, start + na + nb);
+    reverse_widgets(cfg->widgets, start, start + na + nb);
+
+    t = cfg->groups[a];
+    cfg->groups[a] = cfg->groups[b];
+    cfg->groups[b] = t;
+    cfg->groups[a].first_widget = start;
+    cfg->groups[b].first_widget = start + nb;
+
+    for (i = start; i < start + nb; i++)
+        cfg->widgets[i].group = a;
+    for (i = start + nb; i < start + na + nb; i++)
+        cfg->widgets[i].group = b;
+
+    return g + delta;
+}
+
 void cfg_place_groups(const a2h_config *cfg, int *col_of)
 {
     long height[CFG_MAX_COLUMNS];

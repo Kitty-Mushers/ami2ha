@@ -1156,6 +1156,87 @@ static void test_place_groups_empty_group_takes_no_room(void)
     cfg_free(&cfg);
 }
 
+/* The groups' titles and each widget's entity, in storage order. */
+static void check_order(const a2h_config *cfg, const char *titles,
+                        const char *entities)
+{
+    char got[256];
+    int  i, o = 0;
+
+    got[0] = '\0';
+    for (i = 0; i < cfg->ngroups; i++)
+        o += sprintf(got + o, "%s%s", i ? "," : "", cfg->groups[i].title);
+    CHECK_STR(got, titles);
+
+    o = 0;
+    got[0] = '\0';
+    for (i = 0; i < cfg->nwidgets; i++) {
+        const a2h_widget *w = &cfg->widgets[i];
+        const a2h_group  *g = &cfg->groups[w->group];
+
+        /* Every widget lies inside the group it says it belongs to. */
+        CHECK(i >= g->first_widget && i < g->first_widget + g->nwidgets);
+        o += sprintf(got + o, "%s%s", i ? "," : "", w->entity);
+    }
+    CHECK_STR(got, entities);
+}
+
+static void test_move_group(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    CHECK(parse(&cfg,
+        "group \"A\"\n    sensor sensor.a1\n    sensor sensor.a2\nend\n"
+        "group \"B\"\n    sensor sensor.b1\nend\n"
+        "group \"C\" column 2\n"
+        "    sensor sensor.c1\n    sensor sensor.c2\n    sensor sensor.c3\n"
+        "end\n", err, sizeof err));
+
+    /* Up: C trades places with B, and takes its widgets and pin along. */
+    CHECK_INT(cfg_move_group(&cfg, 2, -1), 1);
+    check_order(&cfg, "A,C,B",
+        "sensor.a1,sensor.a2,sensor.c1,sensor.c2,sensor.c3,sensor.b1");
+    CHECK_INT(cfg.groups[1].column, 2);
+
+    /* Down, from the top. */
+    CHECK_INT(cfg_move_group(&cfg, 0, 1), 1);
+    check_order(&cfg, "C,A,B",
+        "sensor.c1,sensor.c2,sensor.c3,sensor.a1,sensor.a2,sensor.b1");
+
+    /* Off either end, nothing happens. */
+    CHECK_INT(cfg_move_group(&cfg, 0, -1), -1);
+    CHECK_INT(cfg_move_group(&cfg, 2, 1), -1);
+    CHECK_INT(cfg_move_group(&cfg, 1, 2), -1);
+    check_order(&cfg, "C,A,B",
+        "sensor.c1,sensor.c2,sensor.c3,sensor.a1,sensor.a2,sensor.b1");
+    cfg_free(&cfg);
+}
+
+static void test_move_group_survives_a_write(void)
+{
+    /* What the settings window saves is the new order. */
+    a2h_config cfg, back;
+    char       err[CFG_ERR_MAX];
+    a2h_buf    out;
+
+    CHECK(parse(&cfg,
+        "group \"Wasser\"\n    sensor sensor.w\nend\n"
+        "group \"Empty\"\nend\n"
+        "group \"Claude\"\n    sensor sensor.c\nend\n", err, sizeof err));
+    CHECK_INT(cfg_move_group(&cfg, 2, -1), 1);   /* past an empty group */
+    CHECK_INT(cfg_move_group(&cfg, 1, -1), 0);
+    check_order(&cfg, "Claude,Wasser,Empty", "sensor.c,sensor.w");
+
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(parse(&back, buf_cstr(&out), err, sizeof err));
+    check_order(&back, "Claude,Wasser,Empty", "sensor.c,sensor.w");
+    buf_free(&out);
+    cfg_free(&back);
+    cfg_free(&cfg);
+}
+
 void suite_config(void)
 {
     RUN(test_globals);
@@ -1203,4 +1284,6 @@ void suite_config(void)
     RUN(test_place_groups_pinned_first);
     RUN(test_place_groups_clamps_a_pin);
     RUN(test_place_groups_empty_group_takes_no_room);
+    RUN(test_move_group);
+    RUN(test_move_group_survives_a_write);
 }

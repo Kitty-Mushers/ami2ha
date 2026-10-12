@@ -58,3 +58,16 @@ The local file should not go away. It works with no server-side setup, it
 can be shared, and it is the only option if someone is pointing an Amiga at
 a Home Assistant they do not administer. Server-side selection is better as
 an additional source, not a replacement.
+
+## Settings window: the group order as a visible list
+
+Groups are reordered with Move up / Move down beside the Group cycle, and
+the cycle's entries carry each group's position and column ("3. Claude
+(column 2)"), so the order can be read by opening the cycle. That was
+judged enough for now (Oct 2026).
+
+If it ever is not: replace or accompany the cycle with a small list of all
+groups, always visible, with the selected one highlighted -- the order and
+the columns at a glance, and possibly drag to reorder. The cost is height
+in a window that already needs most of the screen for the two entity
+lists, which is why it was not done first.

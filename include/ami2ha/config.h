@@ -236,6 +236,14 @@ int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
  */
 void cfg_place_groups(const a2h_config *cfg, int *col_of);
 
+/*
+ * Swap group `g` with its neighbour, one place earlier (`delta` -1) or
+ * later (+1), taking its widgets along. Earlier means higher up in its
+ * column and placed sooner, since placement goes in file order. Returns
+ * the group's new index, or -1 when there is nowhere to go.
+ */
+int cfg_move_group(a2h_config *cfg, int g, int delta);
+
 /* Human-readable name of a widget kind, for error messages and the editor. */
 const char *cfg_widget_kind_name(widget_kind k);
 
