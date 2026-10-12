@@ -862,10 +862,34 @@ static void bind_controls(a2h_ui *ui)
     }
 }
 
-/* Create one framed box per configured group and fill it with widgets. */
+/*
+ * Create one framed box per configured group, fill it with widgets, and
+ * stack the boxes in columns.
+ *
+ * Each column is its own vertical group, side by side in one horizontal
+ * row. That replaced a single MUIA_Group_Columns grid, where every group
+ * in a row was stretched to the height of the tallest -- one camera group
+ * left a hole the size of two camera tiles beside everything next to it.
+ * Here a column is only as tall as what is in it, and a spacer at the
+ * bottom takes up whatever the tallest column leaves over.
+ */
 static void build_groups(a2h_ui *ui)
 {
-    int g, i;
+    Object *row, *col[CFG_MAX_COLUMNS];
+    int     col_of[CFG_MAX_GROUPS];
+    int     ncols = ui->cfg->columns, g, c, i;
+
+    if (ncols < 1)               ncols = 1;
+    if (ncols > CFG_MAX_COLUMNS) ncols = CFG_MAX_COLUMNS;
+
+    cfg_place_groups(ui->cfg, col_of);
+
+    row = MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE, TAG_DONE);
+    if (!row)
+        return;
+    for (c = 0; c < ncols; c++)
+        col[c] = NULL;     /* made on first use: an empty column is a
+                              stripe of nothing, so it is never made */
 
     for (g = 0; g < ui->cfg->ngroups; g++) {
         const a2h_group *grp = &ui->cfg->groups[g];
@@ -896,8 +920,30 @@ static void build_groups(a2h_ui *ui)
              i < grp->first_widget + grp->nwidgets && i < ui->nwidgets; i++)
             build_widget(ui, i, box);
 
-        DoMethod(ui->root, OM_ADDMEMBER, (IPTR)box);
+        c = col_of[g];
+        if (!col[c]) {
+            col[c] = MUI_NewObject(MUIC_Group, TAG_DONE);
+            if (!col[c]) {
+                MUI_DisposeObject(box);
+                continue;
+            }
+        }
+        DoMethod(col[c], OM_ADDMEMBER, (IPTR)box);
     }
+
+    /* Left to right in column order, each with its spacer last. */
+    for (c = 0; c < ncols; c++) {
+        Object *fill;
+
+        if (!col[c])
+            continue;
+        fill = MUI_NewObject(MUIC_Rectangle, TAG_DONE);
+        if (fill)
+            DoMethod(col[c], OM_ADDMEMBER, (IPTR)fill);
+        DoMethod(row, OM_ADDMEMBER, (IPTR)col[c]);
+    }
+
+    DoMethod(ui->root, OM_ADDMEMBER, (IPTR)row);
 }
 
 /*
@@ -980,14 +1026,10 @@ void ui_rebuild(a2h_ui *ui)
         return;
 
     /*
-     * The column count can have changed in the settings window. It is one
-     * of the few group attributes MUI lets you set after creation
-     * (MUIA_Group_Horiz is not), so the dashboard can re-flow without
-     * rebuilding the window around it.
+     * The column count can have changed in the settings window. That needs
+     * nothing here: the columns are children built fresh below, so the
+     * root itself never has to change shape.
      */
-    set(ui->root, MUIA_Group_Columns,
-        (IPTR)(ui->cfg->columns > 0 ? ui->cfg->columns : 1));
-
     DoMethod(ui->root, MUIM_Group_InitChange);
 
     children = NULL;
@@ -1067,11 +1109,9 @@ static a2h_ui *ui_build(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         MUIA_Background,    MUII_TextBack,
         TAG_DONE);
 
-    /* An empty group to hang the configured groups off; children are added
-     * below rather than in the varargs list, since the count is dynamic. */
-    root = MUI_NewObject(MUIC_Group,
-        MUIA_Group_Columns, (IPTR)cfg->columns,
-        TAG_DONE);
+    /* An empty group to hang the dashboard off. Its one child, the row of
+     * columns, is added by build_groups and replaced on every rebuild. */
+    root = MUI_NewObject(MUIC_Group, TAG_DONE);
     ui->root = root;
 
     if (!root || !ui->status) {

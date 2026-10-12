@@ -989,6 +989,173 @@ static void test_write_quotes_do_not_break_the_file(void)
     cfg_free(&back);
 }
 
+static void test_group_column(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    CHECK(parse(&cfg,
+        "columns 3\n"
+        "group \"A\"\n"
+        "    sensor sensor.a\n"
+        "end\n"
+        "group \"B\" column 2\n"
+        "    sensor sensor.b\n"
+        "end\n", err, sizeof err));
+    CHECK_INT(cfg.groups[0].column, 0);
+    CHECK_INT(cfg.groups[1].column, 2);
+    CHECK_STR(cfg.groups[1].title, "B");
+    cfg_free(&cfg);
+
+    CHECK(!parse(&cfg, "group \"A\" column 0\nend\n", err, sizeof err));
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "group \"A\" column 9\nend\n", err, sizeof err));
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "group \"A\" column\nend\n", err, sizeof err));
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "group \"A\" colour 2\nend\n", err, sizeof err));
+    CHECK(strstr(err, "unknown group option") != NULL);
+    cfg_free(&cfg);
+}
+
+static void test_group_column_survives_a_write(void)
+{
+    a2h_config cfg, back;
+    a2h_buf    out;
+    char       err[CFG_ERR_MAX];
+
+    CHECK(parse(&cfg,
+        "group \"A\" column 2\n"
+        "    sensor sensor.a\n"
+        "end\n"
+        "group \"B\"\n"
+        "    sensor sensor.b\n"
+        "end\n", err, sizeof err));
+
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(cfg_parse(&back, (const char *)out.data, out.len, err, sizeof err));
+    CHECK_INT(back.groups[0].column, 2);
+    CHECK_INT(back.groups[1].column, 0);
+    /* An unpinned group is written without the option. */
+    CHECK(strstr((const char *)out.data, "\"B\" column") == NULL);
+
+    buf_free(&out);
+    cfg_free(&cfg);
+    cfg_free(&back);
+}
+
+/* The home dashboard's shape: one tall camera group among short ones. */
+static const char *home_groups =
+    "group \"Umwelt\"\n"
+    "    sensor sensor.a\n    sensor sensor.b\n    sensor sensor.c\n"
+    "end\n"
+    "group \"Energie\"\n"
+    "    sensor sensor.d\n    sensor sensor.e\n"
+    "end\n"
+    "group \"Kameras\"\n"
+    "    camera camera.a width 320 height 180\n"
+    "    camera camera.b width 320 height 180\n"
+    "end\n"
+    "group \"Licht\"\n"
+    "    button scene.a\n    button scene.b\n"
+    "end\n"
+    "group \"Media\"\n"
+    "    media media_player.a\n"
+    "end\n";
+
+static void test_place_groups_one_column(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX], text[1024];
+    int        col[CFG_MAX_GROUPS], g;
+
+    sprintf(text, "columns 1\n%s", home_groups);
+    CHECK(parse(&cfg, text, err, sizeof err));
+    cfg_place_groups(&cfg, col);
+    for (g = 0; g < cfg.ngroups; g++)
+        CHECK_INT(col[g], 0);
+    cfg_free(&cfg);
+}
+
+static void test_place_groups_masonry(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX], text[1024];
+    int        col[CFG_MAX_GROUPS];
+
+    /*
+     * Umwelt (5) left, Energie (4) right; Kameras (26) joins the shorter
+     * right; then Licht and Media both go left, which stays shorter.
+     */
+    sprintf(text, "columns 2\n%s", home_groups);
+    CHECK(parse(&cfg, text, err, sizeof err));
+    cfg_place_groups(&cfg, col);
+    CHECK_INT(col[0], 0);
+    CHECK_INT(col[1], 1);
+    CHECK_INT(col[2], 1);
+    CHECK_INT(col[3], 0);
+    CHECK_INT(col[4], 0);
+    cfg_free(&cfg);
+}
+
+static void test_place_groups_pinned_first(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+    int        col[CFG_MAX_GROUPS];
+
+    /* The tall group is last in the file but pinned left, so everything
+     * else is placed around it rather than on top of it. */
+    CHECK(parse(&cfg,
+        "columns 2\n"
+        "group \"A\"\n    sensor sensor.a\nend\n"
+        "group \"B\"\n    sensor sensor.b\nend\n"
+        "group \"Cams\" column 1\n"
+        "    camera camera.a width 320 height 180\n"
+        "end\n", err, sizeof err));
+    cfg_place_groups(&cfg, col);
+    CHECK_INT(col[2], 0);
+    CHECK_INT(col[0], 1);
+    CHECK_INT(col[1], 1);
+    cfg_free(&cfg);
+}
+
+static void test_place_groups_clamps_a_pin(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+    int        col[CFG_MAX_GROUPS];
+
+    /* Pinned to 4 with only 2 columns: last column, and still 4 on disk. */
+    CHECK(parse(&cfg,
+        "columns 2\n"
+        "group \"A\" column 4\n    sensor sensor.a\nend\n", err, sizeof err));
+    cfg_place_groups(&cfg, col);
+    CHECK_INT(col[0], 1);
+    CHECK_INT(cfg.groups[0].column, 4);
+    cfg_free(&cfg);
+}
+
+static void test_place_groups_empty_group_takes_no_room(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+    int        col[CFG_MAX_GROUPS];
+
+    CHECK(parse(&cfg,
+        "columns 2\n"
+        "group \"Empty\"\nend\n"
+        "group \"A\"\n    sensor sensor.a\nend\n"
+        "group \"B\"\n    sensor sensor.b\nend\n", err, sizeof err));
+    cfg_place_groups(&cfg, col);
+    /* Empty goes left and weighs nothing, so A goes left too. */
+    CHECK_INT(col[0], 0);
+    CHECK_INT(col[1], 0);
+    CHECK_INT(col[2], 1);
+    cfg_free(&cfg);
+}
+
 void suite_config(void)
 {
     RUN(test_globals);
@@ -1029,4 +1196,11 @@ void suite_config(void)
     RUN(test_write_roundtrip);
     RUN(test_write_survives_awkward_text);
     RUN(test_write_quotes_do_not_break_the_file);
+    RUN(test_group_column);
+    RUN(test_group_column_survives_a_write);
+    RUN(test_place_groups_one_column);
+    RUN(test_place_groups_masonry);
+    RUN(test_place_groups_pinned_first);
+    RUN(test_place_groups_clamps_a_pin);
+    RUN(test_place_groups_empty_group_takes_no_room);
 }

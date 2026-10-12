@@ -18,13 +18,13 @@
  *   savedir    Work:ami2ha-shots
  *   columns    2
  *
- *   group "Wohnzimmer"
+ *   group "Wohnzimmer"          # placed in a column automatically
  *       sensor sensor.wohnzimmer_temperatur label "Temperatur"
  *       gauge  sensor.wohnzimmer_co2        label "CO2" min 400 max 2000
  *       toggle light.wohnzimmer             label "Licht"
  *   end
  *
- *   group "Kameras"
+ *   group "Kameras" column 2    # or pinned to one
  *       camera camera.einfahrt  label "Einfahrt" width 320 height 180
  *   end
  *
@@ -53,6 +53,7 @@
 
 /* Bounds exist to keep a mistyped or hostile file from exhausting memory. */
 #define CFG_MAX_GROUPS   32
+#define CFG_MAX_COLUMNS  8
 #define CFG_MAX_WIDGETS  128
 
 /* Widgets are allocated in blocks of this many as the file is read. */
@@ -119,6 +120,13 @@ typedef struct {
     char title[CFG_TITLE_MAX];
     int  first_widget; /* index into cfg->widgets */
     int  nwidgets;
+    /*
+     * Which dashboard column the group sits in, counting from 1; 0 lets
+     * cfg_place_groups choose. Kept as written even when it is beyond the
+     * current column count, so lowering `columns` and raising it again
+     * does not lose the arrangement -- placement clamps it instead.
+     */
+    int  column;
 } a2h_group;
 
 typedef struct {
@@ -216,6 +224,17 @@ void cfg_refine_kinds(a2h_config *cfg, ha_store *store);
 
 int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
                        const char *label);
+
+/*
+ * Decide which column each group goes in, writing a 0-based column index
+ * per group into `col_of` (cfg->ngroups entries). A group pinned with
+ * `column` goes where it says, clamped to the column count. The others
+ * are taken in file order, each joining whichever column is shortest at
+ * that point (the leftmost on a tie) -- the masonry rule, judged on an
+ * estimate of each group's height. Pinned groups are counted first, so an
+ * unpinned one never lands under a tall pinned one by accident.
+ */
+void cfg_place_groups(const a2h_config *cfg, int *col_of);
 
 /* Human-readable name of a widget kind, for error messages and the editor. */
 const char *cfg_widget_kind_name(widget_kind k);

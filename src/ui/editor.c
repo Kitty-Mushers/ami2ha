@@ -39,6 +39,7 @@ struct a2h_editor {
     /* Camera only, and the dashboard-wide column count. */
     Object *str_refresh, *str_camw, *str_camh, *cm_stamp;
     Object *cyc_columns;
+    Object *cyc_gcolumn;  /* which column the group on show sits in */
     Object *bt_save, *bt_use, *bt_cancel;
 
     a2h_config *cfg;      /* the live configuration, edited on apply */
@@ -121,6 +122,12 @@ static const char *kind_labels[] = {
 
 /* Dashboard columns, as offered in the cycle. Index + 1 is the value. */
 static const char *column_labels[] = { "1", "2", "3", "4", NULL };
+
+/* A group's own column. Index 0 is automatic, otherwise the index is the
+ * column -- the same numbering the file uses. */
+static const char *group_column_labels[] = {
+    "Auto", "1", "2", "3", "4", NULL
+};
 
 /* ------------------------------------------------------------------ *
  * Building the working copy
@@ -280,14 +287,37 @@ static void fill_list(Object *list, ed_row *rows, int n)
  */
 static void show_group_name(a2h_editor *ed)
 {
+    int have = ed->cfg->ngroups && ed->group < ed->cfg->ngroups;
+
     if (!ed->str_group)
         return;
 
     SetAttrs(ed->str_group, MUIA_NoNotify, TRUE,
              MUIA_String_Contents,
-             (IPTR)(ed->cfg->ngroups && ed->group < ed->cfg->ngroups
-                        ? ed->cfg->groups[ed->group].title : ""),
+             (IPTR)(have ? ed->cfg->groups[ed->group].title : ""),
              TAG_DONE);
+
+    /* Its column travels with it, for the same reason. A hand-written
+     * file may pin a group beyond what the cycle offers; show the last
+     * entry rather than an index the gadget does not have, and leave the
+     * value itself alone unless the user picks another. */
+    if (ed->cyc_gcolumn) {
+        int col = have ? ed->cfg->groups[ed->group].column : 0;
+        if (col < 0) col = 0;
+        if (col > 4) col = 4;
+        SetAttrs(ed->cyc_gcolumn, MUIA_NoNotify, TRUE,
+                 MUIA_Cycle_Active, (IPTR)col, TAG_DONE);
+    }
+}
+
+static void set_group_column(a2h_editor *ed)
+{
+    LONG col = 0;
+
+    if (ed->group < 0 || ed->group >= ed->cfg->ngroups)
+        return;
+    get(ed->cyc_gcolumn, MUIA_Cycle_Active, &col);
+    ed->cfg->groups[ed->group].column = (int)col;   /* 0 is Auto */
 }
 
 static void refresh_lists(a2h_editor *ed)
@@ -608,6 +638,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
         TAG_DONE);
     ed->cyc_columns = MUI_NewObject(MUIC_Cycle,
         MUIA_Cycle_Entries, (IPTR)column_labels, TAG_DONE);
+    ed->cyc_gcolumn = MUI_NewObject(MUIC_Cycle,
+        MUIA_Cycle_Entries, (IPTR)group_column_labels, TAG_DONE);
 
     ed->bt_add    = make_button("Add >>");
     ed->bt_up     = make_button("Up");
@@ -622,7 +654,7 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     ed->lv_pool = make_list(&ed->list_pool, "Available HA entities", 0);
     ed->lv_used = make_list(&ed->list_used, "Selected entities", 1);
 
-    if (!ed->lv_pool || !ed->lv_used || !ed->cyc_group) {
+    if (!ed->lv_pool || !ed->lv_used || !ed->cyc_group || !ed->cyc_gcolumn) {
         free(ed);
         return NULL;
     }
@@ -636,22 +668,38 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
         MUIA_Window_Height, MUIV_Window_Height_Visible(55),
         MUIA_Window_ID,     (IPTR)(('A' << 24) | ('2' << 16) | ('E' << 8) | '2'),
         MUIA_Window_RootObject, (IPTR)MUI_NewObject(MUIC_Group,
+            /*
+             * Two rows. As one, seven gadgets shared the width and MUI
+             * took it out of the name field, which ended up showing the
+             * last letter of the group's name and nothing else. The two
+             * fields people actually read -- which group, and its name --
+             * now get whatever width is going; everything else keeps its
+             * natural size.
+             */
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
-                MUIA_Group_Horiz, TRUE,
-                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                    MUIA_Text_Contents, (IPTR)"Group:",
-                    MUIA_Weight, (IPTR)0, TAG_DONE),
-                MUIA_Group_Child, (IPTR)ed->cyc_group,
-                MUIA_Group_Child, (IPTR)ed->bt_gnew,
-                MUIA_Group_Child, (IPTR)ed->bt_gdel,
-                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                    MUIA_Text_Contents, (IPTR)"Name:",
-                    MUIA_Weight, (IPTR)0, TAG_DONE),
-                MUIA_Group_Child, (IPTR)ed->str_group,
-                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                    MUIA_Text_Contents, (IPTR)"Columns:",
-                    MUIA_Weight, (IPTR)0, TAG_DONE),
-                MUIA_Group_Child, (IPTR)ed->cyc_columns,
+                MUIA_Frame,      MUIV_Frame_Group,
+                MUIA_FrameTitle, (IPTR)"Group",
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                    MUIA_Group_Horiz, TRUE,
+                    MUIA_Group_Child, (IPTR)ed->cyc_group,
+                    MUIA_Group_Child, (IPTR)ed->bt_gnew,
+                    MUIA_Group_Child, (IPTR)ed->bt_gdel,
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                        MUIA_Text_Contents, (IPTR)"Columns:",
+                        MUIA_Weight, (IPTR)0, TAG_DONE),
+                    MUIA_Group_Child, (IPTR)ed->cyc_columns,
+                    TAG_DONE),
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                    MUIA_Group_Horiz, TRUE,
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                        MUIA_Text_Contents, (IPTR)"Name:",
+                        MUIA_Weight, (IPTR)0, TAG_DONE),
+                    MUIA_Group_Child, (IPTR)ed->str_group,
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                        MUIA_Text_Contents, (IPTR)"In column:",
+                        MUIA_Weight, (IPTR)0, TAG_DONE),
+                    MUIA_Group_Child, (IPTR)ed->cyc_gcolumn,
+                    TAG_DONE),
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
@@ -768,6 +816,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_SELECT);
     DoMethod(ed->str_group, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_RENAME);
+    DoMethod(ed->cyc_gcolumn, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_COL);
     DoMethod(ed->str_label, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_LABEL);
     DoMethod(ed->str_min, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
@@ -1299,6 +1349,10 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
 
     case ID_ED_RENAME:
         rename_group(ed);
+        break;
+
+    case ID_ED_GROUP_COL:
+        set_group_column(ed);
         break;
 
     /* Return in the label, min or max gadget. The commit above already

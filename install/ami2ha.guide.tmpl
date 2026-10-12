@@ -360,6 +360,26 @@ that work rather than fail.
   Groups are yours to arrange: they need not match the areas in Home
   Assistant, and an entity can go wherever it makes sense to you.
 
+@{b}Columns@{ub}
+
+  @{b}columns 2@{ub} puts the groups side by side in two columns. Each
+  column is stacked on its own, so a tall group -- three cameras, say --
+  does not stretch the short groups beside it.
+
+  Left alone, ami2ha places each group in turn in whichever column is
+  shortest so far, so the columns come out roughly even. To decide for
+  yourself, pin a group to a column:
+
+    columns 3
+
+    group "Kameras" column 1
+        camera camera.einfahrt label "Einfahrt" width 320 height 180
+    end
+
+  Pinned groups go where they are told; the others are placed around
+  them. A group pinned to a column the dashboard does not have goes in
+  the last one, and keeps its number for when you add columns back.
+
 @{b}The status line@{ub}
 
   Along the bottom. Normally the server version and how many entities are
@@ -592,9 +612,12 @@ without restarting the program.
                 above, and add it there. It keeps its label and its
                 settings on the way.
 
-  @{b}Columns@{ub}     how many group boxes sit side by side. One is a
-                single tall column; two puts them in pairs. Takes effect
-                when you press Use or Save.
+  @{b}In column@{ub}   which column the group on show sits in. Auto lets
+                ami2ha choose, which keeps the columns even. See
+                @{"Columns" link DASHBOARD}.
+
+  @{b}Columns@{ub}     how many columns the dashboard has. One is a single
+                tall column. Both take effect when you press Use or Save.
 
   @{b}Properties@{ub}   the selected entity's label and how it is shown,
                 the range for a gauge, and for a @{link "camera" CAMERAS}

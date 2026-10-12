@@ -67,6 +67,70 @@ const char *cfg_widget_kind_name(widget_kind k)
     return "?";
 }
 
+/*
+ * Roughly how tall a widget draws, in text rows. Only the proportions
+ * matter -- it decides which column a group joins, not any real size --
+ * so a camera tile counts as its picture plus a caption, and the rest as
+ * the handful of rows they take on screen.
+ */
+static int widget_rows(const a2h_widget *w)
+{
+    switch (w->kind) {
+    case W_CAMERA: return (w->cam_h > 0 ? w->cam_h : 180) / 16 + 2;
+    case W_COLOR:  return 6;
+    case W_MEDIA:  return 3;
+    default:       return 1;
+    }
+}
+
+void cfg_place_groups(const a2h_config *cfg, int *col_of)
+{
+    long height[CFG_MAX_COLUMNS];
+    int  ncols = cfg->columns, g, c, i, pass;
+
+    if (ncols < 1)               ncols = 1;
+    if (ncols > CFG_MAX_COLUMNS) ncols = CFG_MAX_COLUMNS;
+
+    for (c = 0; c < ncols; c++)
+        height[c] = 0;
+
+    /* Pinned groups first, then the rest into whatever room is left. */
+    for (pass = 0; pass < 2; pass++) {
+        for (g = 0; g < cfg->ngroups; g++) {
+            const a2h_group *grp    = &cfg->groups[g];
+            int              pinned = grp->column > 0;
+            long             rows   = 0;
+
+            if (pinned != (pass == 0))
+                continue;
+
+            if (pinned) {
+                c = grp->column - 1;
+                if (c >= ncols)
+                    c = ncols - 1;
+            } else {
+                c = 0;
+                for (i = 1; i < ncols; i++)
+                    if (height[i] < height[c])
+                        c = i;
+            }
+
+            /* An empty group is skipped when the dashboard is built, so
+             * it must not take up room here either. */
+            if (grp->nwidgets > 0) {
+                rows = 2;   /* the frame and its title */
+                for (i = grp->first_widget;
+                     i < grp->first_widget + grp->nwidgets &&
+                     i < cfg->nwidgets; i++)
+                    rows += widget_rows(&cfg->widgets[i]);
+            }
+
+            col_of[g]  = c;
+            height[c] += rows;
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ *
  * Tokenising
  * ------------------------------------------------------------------ */
@@ -489,6 +553,23 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
             cfg->ngroups++;
             in_group = 1;
 
+            /* Options after the title. Only one so far. */
+            while (!s.failed && next_token(&s, tok, sizeof tok)) {
+                long v;
+
+                if (strcmp(tok, "column") != 0) {
+                    cfg_fail(&s, "unknown group option", tok);
+                    break;
+                }
+                if (!next_token(&s, tok, sizeof tok) || !parse_long(tok, &v) ||
+                    v < 1 || v > CFG_MAX_COLUMNS) {
+                    cfg_fail(&s, "expected a column from 1 to 8 after",
+                             "column");
+                    break;
+                }
+                g->column = (int)v;
+            }
+
         } else if (strcmp(tok, "end") == 0) {
             if (!in_group) {
                 cfg_fail(&s, "'end' without 'group'", NULL);
@@ -565,7 +646,7 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
     }
 
     if (cfg->columns < 1) cfg->columns = 1;
-    if (cfg->columns > 8) cfg->columns = 8;
+    if (cfg->columns > CFG_MAX_COLUMNS) cfg->columns = CFG_MAX_COLUMNS;
 
     if (err && errsz)
         err[0] = '\0';
@@ -896,6 +977,8 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
 
         buf_append_str(out, "\ngroup ");
         write_quoted(out, grp->title);
+        if (grp->column > 0)
+            buf_printf(out, " column %d", grp->column);
         buf_append_byte(out, '\n');
 
         for (i = grp->first_widget;

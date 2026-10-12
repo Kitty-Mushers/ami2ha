@@ -251,12 +251,25 @@ them Home Assistant is sending -- over a row of buttons for previous,
 play/pause, next and volume. See
 [examples/dashboard.cfg](examples/dashboard.cfg) for a worked example.
 
+`columns 2` stacks the groups in two columns. Each column is stacked on its
+own, so a tall camera group does not stretch the short groups beside it, and
+each group goes in whichever column is shortest so far. To choose instead,
+pin a group:
+
+```
+columns 3
+
+group "Kameras" column 1
+    camera camera.einfahrt label "Einfahrt" width 320 height 180
+end
+```
+
 You do not have to edit the file, though: **Project → Settings…** opens a
 window where you pick which of the available entities appear, put them in
 groups, name the groups, order them, and set how each is shown -- the range
-for a gauge, a camera's size and refresh interval, and how many group boxes
-sit side by side (`columns`). Save writes the file back, Use applies the
-change without writing it.
+for a gauge, a camera's size and refresh interval, how many columns the
+dashboard has (`columns`) and which column each group goes in. Save writes
+the file back, Use applies the change without writing it.
 
 Note that MUI's cycle gadgets open a popup menu: press and hold, then
 release over the entry you want.
