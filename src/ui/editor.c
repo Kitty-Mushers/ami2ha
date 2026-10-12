@@ -921,27 +921,34 @@ static void group_delete(a2h_editor *ed)
 {
     a2h_config *cfg = ed->cfg;
     a2h_group  *g;
-    int         i;
+    int         i, first, gone;
 
     if (cfg->ngroups == 0 || ed->group < 0 || ed->group >= cfg->ngroups)
         return;
 
     apply(ed);   /* keep the edits to the group we are leaving */
 
-    g = &cfg->groups[ed->group];
+    /*
+     * Copied out before anything moves. `g` points into the groups array,
+     * and the shift below writes the next group over it -- reading
+     * g->nwidgets after that gave every later group the wrong offset.
+     */
+    g     = &cfg->groups[ed->group];
+    first = g->first_widget;
+    gone  = g->nwidgets;
 
     /* Its widgets go back to the pool by simply not being used, but keep
      * their settings so putting one in another group does not reset it. */
-    for (i = g->first_widget; i < g->first_widget + g->nwidgets; i++)
+    for (i = first; i < first + gone; i++)
         stash_put(ed, &cfg->widgets[i]);
 
-    for (i = g->first_widget + g->nwidgets; i < cfg->nwidgets; i++)
-        cfg->widgets[i - g->nwidgets] = cfg->widgets[i];
-    cfg->nwidgets -= g->nwidgets;
+    for (i = first + gone; i < cfg->nwidgets; i++)
+        cfg->widgets[i - gone] = cfg->widgets[i];
+    cfg->nwidgets -= gone;
 
     for (i = ed->group; i < cfg->ngroups - 1; i++) {
         cfg->groups[i] = cfg->groups[i + 1];
-        cfg->groups[i].first_widget -= g->nwidgets;
+        cfg->groups[i].first_widget -= gone;
     }
     cfg->ngroups--;
 
