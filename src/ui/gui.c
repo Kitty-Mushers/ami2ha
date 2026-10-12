@@ -626,7 +626,6 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE);
         if (!uw->control)
             return 0;
-        DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
 
         /*
          * Right-click is the menu button on this machine, and MUI turns it
@@ -649,30 +648,52 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
         else
             uw->cam_menu = uw->cam_save = NULL;
 
-        if (w->cam_stamp) {
-            /* The picture and its caption share the cell, so the grid is
-             * still two columns and the camera row still lines up with the
-             * readings above it. */
-            Object *cell;
+        /*
+         * The caption goes under the picture, in the same cell, rather than
+         * in the label column beside it. Beside it, the label column had
+         * to be as wide as the longest camera name, and a group of cameras
+         * was mostly that column: empty grey with a word half way down.
+         *
+         * The label column still gets a cell, so the grid stays two wide
+         * and a camera can share a group with readings. It is an empty one
+         * of no weight, so a group holding only cameras gives that column
+         * no room at all.
+         */
+        {
+            Object *cell, *caption;
 
-            strcpy(uw->stamp_text, "--");
-            uw->stamp = MUI_NewObject(MUIC_Text,
-                MUIA_Text_Contents, (IPTR)uw->stamp_text,
+            caption = MUI_NewObject(MUIC_Text,
+                MUIA_Text_Contents, (IPTR)w->label,
                 MUIA_Text_PreParse, (IPTR)"\33c",
-                MUIA_Font,          (IPTR)MUIV_Font_Tiny,
                 TAG_DONE);
+
+            if (w->cam_stamp) {
+                strcpy(uw->stamp_text, "--");
+                uw->stamp = MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)uw->stamp_text,
+                    MUIA_Text_PreParse, (IPTR)"\33c",
+                    MUIA_Font,          (IPTR)MUIV_Font_Tiny,
+                    TAG_DONE);
+            }
+
             cell = MUI_NewObject(MUIC_Group,
-                MUIA_Group_Child, (IPTR)uw->control,
-                MUIA_Group_Child, (IPTR)uw->stamp,
+                MUIA_Group_Spacing, (IPTR)1,
+                MUIA_Group_Child,   (IPTR)uw->control,
+                caption  ? MUIA_Group_Child : TAG_IGNORE, (IPTR)caption,
+                uw->stamp ? MUIA_Group_Child : TAG_IGNORE, (IPTR)uw->stamp,
                 TAG_DONE);
-            if (!cell || !uw->stamp) {
+
+            DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Rectangle,
+                MUIA_Weight, (IPTR)0, TAG_DONE));
+            if (!cell) {
+                /* Not attached to anything yet, so ours to free. */
+                if (caption)   MUI_DisposeObject(caption);
+                if (uw->stamp) MUI_DisposeObject(uw->stamp);
                 uw->stamp = NULL;
                 DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
                 return 1;
             }
             DoMethod(parent, OM_ADDMEMBER, (IPTR)cell);
-        } else {
-            DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
         }
         return 1;
 
@@ -763,9 +784,29 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             TAG_DONE);
         if (!uw->control)
             return 0;
-        DoMethod(parent, OM_ADDMEMBER, (IPTR)uw->control);
-        DoMethod(parent, OM_ADDMEMBER,
-                 (IPTR)MUI_NewObject(MUIC_Rectangle, TAG_DONE));
+
+        /*
+         * Centred, at half the width of the box. It used to fill the label
+         * column with an empty cell beside it, which left every button
+         * hugging the left edge with the right half of its box blank.
+         *
+         * The label column gets an empty cell of no weight, as a camera's
+         * does, so a group of buttons gives that column no room. The
+         * spacers either side share the rest by weight rather than leaving
+         * each button its natural size: buttons stacked in a group then
+         * come out the same width, instead of a ragged edge that follows
+         * the length of each label.
+         */
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Rectangle,
+            MUIA_Weight, (IPTR)0, TAG_DONE));
+        DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Group,
+            MUIA_Group_Horiz, TRUE,
+            MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Rectangle,
+                MUIA_Weight, (IPTR)50, TAG_DONE),
+            MUIA_Group_Child, (IPTR)uw->control,
+            MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Rectangle,
+                MUIA_Weight, (IPTR)50, TAG_DONE),
+            TAG_DONE));
         return 1;
     }
 
@@ -2609,11 +2650,23 @@ int ui_run(a2h_ui *ui)
             continue;
         }
 
+        /*
+         * Both of these used to fail in silence: the menu item simply did
+         * nothing, which looks exactly like a missed click.
+         */
+        if (id == ID_ED_OPEN && !ui->editor) {
+            ui_flash_status(ui, "The settings window could not be built");
+            continue;
+        }
+
         {
             int relayout = 0;
             if (editor_handle(ui->editor, id, &relayout)) {
                 if (relayout)
                     ui_rebuild(ui);
+                if (id == ID_ED_OPEN && !editor_is_open(ui->editor))
+                    ui_flash_status(ui,
+                        "The settings window does not fit on this screen");
                 continue;
             }
         }

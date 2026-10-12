@@ -46,6 +46,10 @@ void        editor_dispose(a2h_editor *ed);
 /* Bring the window up, rebuilt from the current configuration. */
 void editor_show(a2h_editor *ed);
 
+/* Whether the window is actually on screen. MUI declines to open one that
+ * cannot fit, and says so only by leaving this false. */
+int  editor_is_open(a2h_editor *ed);
+
 /*
  * Handle one application return ID. Returns 1 if it belonged to the editor.
  * *relayout is set when the dashboard should be rebuilt.

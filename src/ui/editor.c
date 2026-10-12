@@ -587,10 +587,13 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     ed->ha  = ha;
     strncpy(ed->path, path ? path : "", sizeof ed->path - 1);
 
-    ed->cyc_group = MUI_NewObject(MUIC_Cycle, TAG_DONE);
+    ed->cyc_group = MUI_NewObject(MUIC_Cycle,
+        MUIA_Weight,         (IPTR)300,
+        TAG_DONE);
     ed->str_group = MUI_NewObject(MUIC_String,
         MUIA_Frame,          MUIV_Frame_String,
         MUIA_String_MaxLen,  (IPTR)CFG_TITLE_MAX,
+        MUIA_Weight,         (IPTR)300,
         TAG_DONE);
     ed->str_label = MUI_NewObject(MUIC_String,
         MUIA_Frame,          MUIV_Frame_String,
@@ -664,7 +667,7 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
         MUIA_Window_ScreenTitle, (IPTR)A2H_TITLE,
         /* Lists need room to be usable; MUI would otherwise shrink the
          * window to the few rows it happens to hold at open time. */
-        MUIA_Window_Width,  MUIV_Window_Width_Visible(48),
+        MUIA_Window_Width,  MUIV_Window_Width_Visible(60),
         MUIA_Window_Height, MUIV_Window_Height_Visible(55),
         MUIA_Window_ID,     (IPTR)(('A' << 24) | ('2' << 16) | ('E' << 8) | '2'),
         MUIA_Window_RootObject, (IPTR)MUI_NewObject(MUIC_Group,
@@ -895,6 +898,16 @@ void editor_show(a2h_editor *ed)
     refresh_groups(ed);
     refresh_lists(ed);
     set(ed->win, MUIA_Window_Open, TRUE);
+}
+
+int editor_is_open(a2h_editor *ed)
+{
+    IPTR open = FALSE;
+
+    if (!ed || !ed->win)
+        return 0;
+    get(ed->win, MUIA_Window_Open, &open);
+    return open != FALSE;
 }
 
 /* ------------------------------------------------------------------ *
