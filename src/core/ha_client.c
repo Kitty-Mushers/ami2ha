@@ -137,9 +137,14 @@ static int apply_label_list(ha_client *c, const char *csv)
         i += len + 1;
     }
 
+    /* The filter points into what is about to be freed. Left alone, an
+     * empty answer on a reconnect kept the previous connection's count
+     * and handed out pointers to freed memory. */
     free(c->label_ptrs);
-    c->label_ptrs = NULL;
-    c->label_count = 0;
+    c->label_ptrs   = NULL;
+    c->label_count  = 0;
+    c->filter       = NULL;
+    c->filter_count = 0;
     if (n == 0)
         return 1;
 
@@ -196,6 +201,7 @@ void ha_client_reset(ha_client *c)
      * would have the next connection unsubscribe a template it never
      * subscribed to. */
     c->template_id  = 0;
+    c->label_refreshing = 0;
     c->error[0]     = '\0';
     c->version[0]   = '\0';
 }
@@ -513,22 +519,58 @@ static void send_subscribe_entities(ha_client *c)
         send_text(c, (const char *)m.data, m.len);
     buf_free(&m);
 
-    c->state = HA_ST_LOADING;
+    /* A refresh swaps the subscription on a live connection, which stays
+     * live: the newcomers simply arrive as changes. */
+    if (c->state != HA_ST_READY)
+        c->state = HA_ST_LOADING;
+}
+
+/* Cancel a subscription by the id it was made with, and forget the id. */
+static void unsubscribe(ha_client *c, unsigned long *sub)
+{
+    char msg[96];
+    int  n;
+
+    if (!*sub)
+        return;
+    n = sprintf(msg, "{\"id\":%lu,\"type\":\"unsubscribe_events\","
+                     "\"subscription\":%lu}",
+                (unsigned long)c->next_id++, *sub);
+    send_text(c, msg, (size_t)n);
+    *sub = 0;
 }
 
 /* The label query is a subscription; we only want its first answer. */
 static void stop_template(ha_client *c)
 {
-    char msg[96];
-    int  n;
+    unsubscribe(c, &c->template_id);
+}
 
-    if (!c->template_id)
-        return;
-    n = sprintf(msg, "{\"id\":%lu,\"type\":\"unsubscribe_events\","
-                     "\"subscription\":%lu}",
-                (unsigned long)c->next_id++, c->template_id);
-    send_text(c, msg, (size_t)n);
-    c->template_id = 0;
+/* Ask which entities carry the label. The answer comes as an event. */
+static void send_label_query(ha_client *c)
+{
+    a2h_buf m;
+
+    buf_init(&m);
+    c->template_id = c->next_id++;
+    buf_printf(&m, "{\"id\":%lu,\"type\":\"render_template\","
+                   "\"template\":\"{{ label_entities('", c->template_id);
+    buf_append_str(&m, c->label);
+    buf_append_str(&m, "') | join(',') }}\"}");
+    if (!m.failed)
+        send_text(c, (const char *)m.data, m.len);
+    buf_free(&m);
+}
+
+int ha_client_refresh_label(ha_client *c)
+{
+    if (!c->label[0] || c->state != HA_ST_READY)
+        return 0;
+    if (c->label_refreshing)
+        return 1;
+    c->label_refreshing = 1;
+    send_label_query(c);
+    return 1;
 }
 
 static void send_initial_requests(ha_client *c)
@@ -547,18 +589,7 @@ static void send_initial_requests(ha_client *c)
      */
     if (c->label[0]) {
         /* Ask which entities carry the label; subscribe once we know. */
-        a2h_buf m;
-
-        buf_init(&m);
-        c->template_id = c->next_id++;
-        buf_printf(&m, "{\"id\":%lu,\"type\":\"render_template\","
-                       "\"template\":\"{{ label_entities('", c->template_id);
-        buf_append_str(&m, c->label);
-        buf_append_str(&m, "') | join(',') }}\"}");
-        if (!m.failed)
-            send_text(c, (const char *)m.data, m.len);
-        buf_free(&m);
-
+        send_label_query(c);
         c->state = HA_ST_LOADING;
         return;
     }
@@ -618,6 +649,132 @@ static void handle_result(ha_client *c, long id, json_parser *jp,
     json_skip(jp, tok);
 }
 
+/* Whether a comma separated list names anything at all. */
+static int csv_has_ids(const char *csv)
+{
+    for (; *csv; csv++)
+        if (*csv != ',')
+            return 1;
+    return 0;
+}
+
+/* Whether the current filter names the `len` bytes at `id`. */
+static int in_filter(const ha_client *c, const char *id, size_t len)
+{
+    int i;
+
+    for (i = 0; i < c->filter_count; i++)
+        if (c->filter[i] && strlen(c->filter[i]) == len &&
+            strncmp(c->filter[i], id, len) == 0)
+            return 1;
+    return 0;
+}
+
+/* Whether a comma separated list names `id`. */
+static int csv_has(const char *csv, const char *id)
+{
+    size_t idlen = strlen(id);
+
+    while (*csv) {
+        const char *comma = strchr(csv, ',');
+        size_t      len   = comma ? (size_t)(comma - csv) : strlen(csv);
+
+        if (len == idlen && strncmp(csv, id, len) == 0)
+            return 1;
+        csv += len;
+        if (*csv == ',')
+            csv++;
+    }
+    return 0;
+}
+
+/*
+ * Count what a new answer adds to and drops from the current filter, into
+ * label_added and label_dropped.
+ */
+static void label_diff(ha_client *c, const char *csv)
+{
+    const char *p = csv;
+    int         i;
+
+    c->label_added = c->label_dropped = 0;
+
+    while (*p) {
+        const char *comma = strchr(p, ',');
+        size_t      len   = comma ? (size_t)(comma - p) : strlen(p);
+
+        if (len && !in_filter(c, p, len))
+            c->label_added++;
+        p += len;
+        if (*p == ',')
+            p++;
+    }
+    for (i = 0; i < c->filter_count; i++)
+        if (c->filter[i] && !csv_has(csv, c->filter[i]))
+            c->label_dropped++;
+}
+
+/* The label's answer on connect: it decides what to subscribe to. Returns
+ * 0 when the client failed. */
+static int label_answered(ha_client *c, const char *csv)
+{
+    if (!apply_label_list(c, csv)) {
+        fail_client(c, "out of memory");
+        return 0;
+    }
+    if (c->cb.entities_discovered)
+        c->cb.entities_discovered(c, c->filter, c->filter_count, c->cb.user);
+
+    if (c->filter_count == 0) {
+        char why[HA_ERROR_MAX];
+        sprintf(why, "no entities carry the label '%.30s'", c->label);
+        fail_client(c, why);
+        return 0;
+    }
+    send_subscribe_entities(c);
+    return 1;
+}
+
+/*
+ * The label's answer to a refresh. The connection is live and stays so:
+ * the callback hears the new list either way, and only a list that changed
+ * costs a new subscription.
+ *
+ * A label that no longer names anything is reported and otherwise ignored.
+ * On connect that is a failure worth stopping for, but here it would mean
+ * subscribing to an empty list -- which Home Assistant reads as "every
+ * entity", the very download the label exists to avoid. What is subscribed
+ * stays subscribed until the next connect.
+ */
+static int label_refreshed(ha_client *c, const char *csv)
+{
+    int changed;
+
+    label_diff(c, csv);
+
+    if (!csv_has_ids(csv)) {
+        if (c->cb.entities_discovered)
+            c->cb.entities_discovered(c, NULL, 0, c->cb.user);
+        c->label_refreshing = 0;
+        return 1;
+    }
+
+    changed = c->label_added || c->label_dropped;
+    if (changed && !apply_label_list(c, csv)) {
+        fail_client(c, "out of memory");
+        return 0;
+    }
+    if (c->cb.entities_discovered)
+        c->cb.entities_discovered(c, c->filter, c->filter_count, c->cb.user);
+    c->label_refreshing = 0;
+
+    if (changed) {
+        unsubscribe(c, &c->subscribe_id);
+        send_subscribe_entities(c);
+    }
+    return 1;
+}
+
 /* Handle an "event" payload: descend to event.data.new_state. */
 static void handle_event(ha_client *c, long id, json_parser *jp, json_token *tok)
 {
@@ -642,26 +799,27 @@ static void handle_event(ha_client *c, long id, json_parser *jp, json_token *tok
          */
         if (is_result && vt == JSON_STRING &&
             c->template_id && (unsigned long)id == c->template_id) {
-            char ids[1024];
+            /*
+             * Sized from the answer. This was a fixed 1 KB, which a label
+             * on forty-odd entities outgrows -- and json_str_copy cuts
+             * quietly, so the last ones would simply never have appeared.
+             * The raw length includes any escapes, so it is never short.
+             */
+            char *ids = (char *)malloc(t.len + 1);
+            int   ok;
 
-            json_str_copy(&t, ids, sizeof ids);
-            stop_template(c);
-
-            if (!apply_label_list(c, ids)) {
+            if (!ids) {
                 fail_client(c, "out of memory");
                 return;
             }
-            if (c->cb.entities_discovered)
-                c->cb.entities_discovered(c, c->filter, c->filter_count,
-                                          c->cb.user);
+            json_str_copy(&t, ids, t.len + 1);
+            stop_template(c);
 
-            if (c->filter_count == 0) {
-                char why[HA_ERROR_MAX];
-                sprintf(why, "no entities carry the label '%.30s'", c->label);
-                fail_client(c, why);
+            ok = c->label_refreshing ? label_refreshed(c, ids)
+                                     : label_answered(c, ids);
+            free(ids);
+            if (!ok)
                 return;
-            }
-            send_subscribe_entities(c);
             continue;
         }
 

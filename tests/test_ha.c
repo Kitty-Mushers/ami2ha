@@ -1054,6 +1054,286 @@ static void test_label_with_no_entities(void)
     ha_client_free(&c);
 }
 
+/* ---- refreshing the label on a live connection ---- */
+
+static int refresh_seen;       /* label_refreshing, as the callback saw it */
+
+static void on_discovered_refresh(ha_client *c, const char *const *ids,
+                                  int n, void *user)
+{
+    refresh_seen = c->label_refreshing;
+    on_discovered(c, ids, n, user);
+}
+
+/* A labelled client, live on light.kitchen and sensor.temp. */
+static void label_session(ha_client *c, probe *p, fake_server *s)
+{
+    char msg[512];
+
+    setup(c, p);
+    server_init(s);
+    c->cb.entities_discovered = on_discovered_refresh;
+    discovered_count = 0;
+    refresh_seen = -1;
+
+    ha_client_set_label(c, "amiga");
+    ha_client_begin(c);
+    buf_reset(ha_client_out(c));
+    complete_handshake(c);
+    server_send(c, "{\"type\":\"auth_required\"}");
+    server_recv(s, c, msg, sizeof msg);                 /* auth */
+    server_send(c, "{\"type\":\"auth_ok\"}");
+    server_recv(s, c, msg, sizeof msg);                 /* template */
+    server_send(c,
+        "{\"id\":1,\"type\":\"event\",\"event\":{\"result\":"
+        "\"light.kitchen,sensor.temp\"}}");
+    server_recv(s, c, msg, sizeof msg);                 /* unsubscribe */
+    server_recv(s, c, msg, sizeof msg);                 /* subscribe   */
+    server_send(c,
+        "{\"id\":3,\"type\":\"event\",\"event\":{\"a\":{"
+        "\"light.kitchen\":{\"s\":\"on\"},"
+        "\"sensor.temp\":{\"s\":\"19\"}}}}");
+    CHECK_INT(c->state, HA_ST_READY);
+    CHECK_INT(refresh_seen, 0);         /* connecting is not refreshing */
+}
+
+/* The id of the template the client just asked for. */
+static unsigned long sent_template(fake_server *s, ha_client *c)
+{
+    char msg[512];
+
+    CHECK(server_recv(s, c, msg, sizeof msg));
+    CHECK(strstr(msg, "\"type\":\"render_template\"") != NULL);
+    CHECK(strstr(msg, "label_entities('amiga')") != NULL);
+    return c->template_id;
+}
+
+static void test_refresh_label_unchanged(void)
+{
+    /* Nothing new labelled: the callback still hears, so the user gets an
+     * answer, but the subscription is left exactly as it was. */
+    ha_client     c;
+    probe         p;
+    fake_server   s;
+    char          msg[512], answer[160];
+    unsigned long sub, tpl;
+
+    label_session(&c, &p, &s);
+    sub = c.subscribe_id;
+
+    CHECK_INT(ha_client_refresh_label(&c), 1);
+    tpl = sent_template(&s, &c);
+    CHECK_INT(c.state, HA_ST_READY);    /* live throughout */
+
+    sprintf(answer, "{\"id\":%lu,\"type\":\"event\",\"event\":{\"result\":"
+                    "\"sensor.temp,light.kitchen\"}}", tpl);
+    CHECK_INT(server_send(&c, answer), 1);
+    CHECK_INT(refresh_seen, 1);
+    CHECK_INT(discovered_count, 2);
+    CHECK_INT(c.label_refreshing, 0);
+    CHECK_INT(c.label_added, 0);        /* same set, another order */
+    CHECK_INT(c.label_dropped, 0);
+
+    /* Only the template is cancelled; no new subscription. */
+    CHECK(server_recv(&s, &c, msg, sizeof msg));
+    CHECK(strstr(msg, "\"type\":\"unsubscribe_events\"") != NULL);
+    CHECK(!server_recv(&s, &c, msg, sizeof msg));
+    CHECK_INT((long)c.subscribe_id, (long)sub);
+    CHECK_INT(p.ready_calls, 1);
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
+static void test_refresh_label_adds_an_entity(void)
+{
+    /* A newly labelled entity: the old subscription goes, a new one
+     * covering the whole set replaces it, and the newcomer arrives as a
+     * change -- without the client ever leaving READY. */
+    ha_client     c;
+    probe         p;
+    fake_server   s;
+    char          msg[512], answer[200], want[64];
+    unsigned long sub, tpl;
+
+    label_session(&c, &p, &s);
+    sub = c.subscribe_id;
+
+    CHECK_INT(ha_client_refresh_label(&c), 1);
+    tpl = sent_template(&s, &c);
+
+    sprintf(answer, "{\"id\":%lu,\"type\":\"event\",\"event\":{\"result\":"
+                    "\"light.kitchen,scene.party,light.hall\"}}", tpl);
+    CHECK_INT(server_send(&c, answer), 1);
+    CHECK_INT(refresh_seen, 1);
+    CHECK_INT(discovered_count, 3);
+    CHECK_STR(discovered[1], "scene.party");
+    CHECK_INT(c.label_added, 2);        /* scene.party, light.hall */
+    CHECK_INT(c.label_dropped, 1);      /* sensor.temp             */
+
+    CHECK(server_recv(&s, &c, msg, sizeof msg));        /* the template */
+    CHECK(strstr(msg, "\"type\":\"unsubscribe_events\"") != NULL);
+    CHECK(server_recv(&s, &c, msg, sizeof msg));        /* the old set  */
+    sprintf(want, "\"subscription\":%lu", sub);
+    CHECK(strstr(msg, "\"type\":\"unsubscribe_events\"") != NULL);
+    CHECK(strstr(msg, want) != NULL);
+    CHECK(server_recv(&s, &c, msg, sizeof msg));        /* the new set  */
+    CHECK(strstr(msg, "\"type\":\"subscribe_entities\"") != NULL);
+    CHECK(strstr(msg, "scene.party") != NULL);
+    CHECK(strstr(msg, "light.kitchen") != NULL);
+    CHECK(strstr(msg, "sensor.temp") == NULL);
+    CHECK_INT(c.state, HA_ST_READY);
+
+    CHECK_INT(server_send(&c,
+        "{\"id\":9,\"type\":\"event\",\"event\":{\"a\":{"
+        "\"light.kitchen\":{\"s\":\"on\"},"
+        "\"light.hall\":{\"s\":\"off\"},"
+        "\"scene.party\":{\"s\":\"unknown\"}}}}"), 1);
+    CHECK(ha_store_get(&c.store, "scene.party") != NULL);
+    CHECK_INT(p.ready_calls, 1);        /* no second "connected" */
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
+static void test_refresh_label_now_empty(void)
+{
+    /* Everything unlabelled. Reported, but never answered with an empty
+     * subscribe_entities -- Home Assistant reads that as every entity. */
+    ha_client     c;
+    probe         p;
+    fake_server   s;
+    char          msg[512], answer[160];
+    unsigned long tpl;
+
+    label_session(&c, &p, &s);
+
+    CHECK_INT(ha_client_refresh_label(&c), 1);
+    tpl = sent_template(&s, &c);
+    discovered_count = -1;
+    sprintf(answer, "{\"id\":%lu,\"type\":\"event\",\"event\":{\"result\":"
+                    "\"\"}}", tpl);
+    CHECK_INT(server_send(&c, answer), 1);
+    CHECK_INT(discovered_count, 0);
+    CHECK_INT(c.label_dropped, 2);
+    CHECK_INT(c.state, HA_ST_READY);
+    CHECK(server_recv(&s, &c, msg, sizeof msg));        /* the template */
+    CHECK(!server_recv(&s, &c, msg, sizeof msg));       /* nothing else */
+    CHECK_INT(c.filter_count, 2);       /* still showing what it had */
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
+static void test_refresh_label_needs_a_live_label(void)
+{
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+
+    /* Not connected yet. */
+    setup(&c, &p);
+    ha_client_set_label(&c, "amiga");
+    CHECK_INT(ha_client_refresh_label(&c), 0);
+    ha_client_free(&c);
+
+    /* Connected, but with no label there is nothing to ask. */
+    setup(&c, &p);
+    server_init(&s);
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    server_recv(&s, &c, msg, sizeof msg);
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    c.state = HA_ST_READY;
+    CHECK_INT(ha_client_refresh_label(&c), 0);
+    server_free(&s);
+    ha_client_free(&c);
+
+    /* Asked twice before the answer: one query, not two. */
+    label_session(&c, &p, &s);
+    CHECK_INT(ha_client_refresh_label(&c), 1);
+    sent_template(&s, &c);
+    CHECK_INT(ha_client_refresh_label(&c), 1);
+    CHECK(!server_recv(&s, &c, msg, sizeof msg));
+    server_free(&s);
+    ha_client_free(&c);
+}
+
+static void test_long_label_list_is_kept_whole(void)
+{
+    /* The answer used to be copied into 1 KB and cut there, silently. */
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+    a2h_buf     ans;
+    int         i;
+
+    setup(&c, &p);
+    server_init(&s);
+    c.cb.entities_discovered = on_discovered;
+    ha_client_set_label(&c, "amiga");
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    server_recv(&s, &c, msg, sizeof msg);
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    server_recv(&s, &c, msg, sizeof msg);
+
+    buf_init(&ans);
+    buf_append_str(&ans, "{\"id\":1,\"type\":\"event\",\"event\":{\"result\":\"");
+    for (i = 0; i < 60; i++)            /* about 2.4 KB of ids */
+        buf_printf(&ans, "%ssensor.a_fairly_long_entity_name_%02d",
+                   i ? "," : "", i);
+    buf_append_str(&ans, "\"}}");
+    buf_append_byte(&ans, 0);
+    CHECK_INT(server_send(&c, (const char *)ans.data), 1);
+    buf_free(&ans);
+
+    CHECK_INT(discovered_count, 60);
+    CHECK_INT(c.filter_count, 60);
+    CHECK_STR(c.filter[59], "sensor.a_fairly_long_entity_name_59");
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
+static void test_empty_label_on_reconnect_drops_the_old_list(void)
+{
+    /* The filter pointed into the previous answer's storage; an empty
+     * answer freed that and left the old count behind. */
+    ha_client   c;
+    probe       p;
+    fake_server s;
+    char        msg[512];
+
+    label_session(&c, &p, &s);
+    ha_client_reset(&c);
+    server_free(&s);
+    server_init(&s);
+
+    ha_client_begin(&c);
+    buf_reset(ha_client_out(&c));
+    complete_handshake(&c);
+    server_send(&c, "{\"type\":\"auth_required\"}");
+    server_recv(&s, &c, msg, sizeof msg);
+    server_send(&c, "{\"type\":\"auth_ok\"}");
+    server_recv(&s, &c, msg, sizeof msg);
+    CHECK_INT(server_send(&c,
+        "{\"id\":1,\"type\":\"event\",\"event\":{\"result\":\"\"}}"), 0);
+    CHECK_INT(discovered_count, 0);
+    CHECK_INT(c.filter_count, 0);
+    CHECK(c.filter == NULL);
+    CHECK_INT(c.state, HA_ST_FAILED);
+
+    server_free(&s);
+    ha_client_free(&c);
+}
+
 void suite_ha(void)
 {
     RUN(test_short_arrays_are_kept);
@@ -1079,4 +1359,10 @@ void suite_ha(void)
     RUN(test_no_filter_stores_everything);
     RUN(test_label_discovery);
     RUN(test_label_with_no_entities);
+    RUN(test_refresh_label_unchanged);
+    RUN(test_refresh_label_adds_an_entity);
+    RUN(test_refresh_label_now_empty);
+    RUN(test_refresh_label_needs_a_live_label);
+    RUN(test_long_label_list_is_kept_whole);
+    RUN(test_empty_label_on_reconnect_drops_the_old_list);
 }

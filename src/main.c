@@ -95,15 +95,54 @@ struct app {
 
 /* ------------------------------------------------------------------ */
 
+/*
+ * What a refresh found, for the status line or stdout. Counted against the
+ * list before it, not against the dashboard: entities someone labelled but
+ * chose not to show are not news on every refresh.
+ *
+ * Only a count. The layout is never touched, because a dashboard someone
+ * has arranged should stay as they left it; the newcomers wait in the
+ * settings window's list until placed.
+ */
+static void report_refresh(struct app *a, const ha_client *c, int n)
+{
+    char msg[96];
+    int  len;
+
+    if (n == 0) {
+        sprintf(msg, "No entities carry the label '%.30s' any more",
+                a->dash->label);
+    } else {
+        if (c->label_added)
+            len = sprintf(msg, "%d new labelled entit%s", c->label_added,
+                          c->label_added == 1 ? "y" : "ies");
+        else
+            len = sprintf(msg, "No new labelled entities");
+        if (c->label_dropped)
+            len += sprintf(msg + len, ", %d gone", c->label_dropped);
+        if (c->label_added)
+            sprintf(msg + len, " -- see Settings");
+    }
+
+    if (a->ui)
+        ui_set_status(a->ui, msg);
+    else
+        printf("ami2ha: %s\n", msg);
+}
+
 static void cb_discovered(ha_client *c, const char *const *ids, int n,
                           void *user)
 {
     struct app *a = (struct app *)user;
     int         i;
 
-    A2H_UNUSED(c);
     if (!a->dash)
         return;
+
+    if (c->label_refreshing) {
+        report_refresh(a, c, n);
+        return;
+    }
 
     printf("ami2ha: label '%s' selected %d entit%s\n",
            a->dash->label, n, n == 1 ? "y" : "ies");

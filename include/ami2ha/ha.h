@@ -46,7 +46,13 @@ typedef struct {
     void (*failed)(ha_client *c, const char *message, void *user);
     /*
      * Home Assistant answered which entities carry the configured label.
-     * The array is owned by the client and stays valid until it is freed.
+     * The array is owned by the client and stays valid until the next
+     * answer replaces it, or the client is freed.
+     *
+     * Also called with the answer to ha_client_refresh_label, with
+     * `label_refreshing` set while it runs and `label_added` and
+     * `label_dropped` saying what changed -- and there, with NULL and 0
+     * when the label no longer names anything.
      */
     void (*entities_discovered)(ha_client *c, const char *const *ids,
                                 int count, void *user);
@@ -107,6 +113,11 @@ struct ha_client {
     a2h_buf       label_blob;   /* the id list, commas replaced by NULs */
     char        **label_ptrs;   /* pointers into label_blob             */
     int           label_count;
+    int           label_refreshing; /* a refresh's answer is awaited */
+    /* What the refresh's answer changed, against the list before it:
+     * valid while entities_discovered runs for a refresh. */
+    int           label_added;
+    int           label_dropped;
 };
 
 /*
@@ -139,6 +150,19 @@ void ha_client_set_filter(ha_client *c, const char *const *ids, int count);
  * Takes precedence over ha_client_set_filter.
  */
 void ha_client_set_label(ha_client *c, const char *label);
+
+/*
+ * Ask again which entities carry the label, on the live connection --
+ * someone has labelled more in Home Assistant and wants them without a
+ * restart. The answer arrives through entities_discovered; if the set
+ * changed, the subscription is swapped for one covering the new set and
+ * the newcomers arrive through entity_changed. Nothing is dropped and the
+ * client stays READY throughout.
+ *
+ * Returns 0 when there is no label or the client is not live. Asking again
+ * before the answer is in is not an error: the one answer serves both.
+ */
+int ha_client_refresh_label(ha_client *c);
 
 /* Reset to IDLE, keeping configuration, so a reconnect can reuse it. */
 void ha_client_reset(ha_client *c);

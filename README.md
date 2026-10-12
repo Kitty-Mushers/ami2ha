@@ -301,6 +301,12 @@ supports rather than guessed at, so an RGB strip arrives as an RGB strip.
 A kind you wrote yourself is never overridden — `toggle light.strip` stays a
 checkmark even for a light that could do more.
 
+Labelled something new while ami2ha is running? **Project → Refresh
+entities** (right-Amiga E, or `REFRESH` over ARexx) asks Home Assistant
+again without dropping the connection. The status line says how many are new
+— "2 new labelled entities -- see Settings" — and they wait in the settings
+window's list; a dashboard you arranged is never rearranged for you.
+
 For an `https://` server add `tls yes` (and `tlsverify no` if the
 certificate is self-signed).
 
@@ -354,9 +360,7 @@ The WebSocket API pushes state changes, so the Amiga is not polling.
 The link is watched rather than assumed: ami2ha pings every 30 seconds and,
 if nothing answers within 90, says the connection is gone instead of showing
 this morning's values indefinitely. **Project → Reconnect** (right-Amiga R)
-forces a fresh connection at any time — which is also how you pick up an
-entity you have only just labelled in Home Assistant, since the entity list is
-requested when the connection is made. If the *first* connection fails, a
+forces a fresh connection at any time. If the *first* connection fails, a
 requester says why and offers Retry, so a Workbench launch does not simply
 exit without explanation.
 

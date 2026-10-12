@@ -107,13 +107,18 @@ ADDRESS 'SOMEEDITOR' 'INSERT TEXT "Kitchen now' newstate 'degrees"'
 
 ```
 STATUS      connection state, server version and entity count, space separated
+REFRESH     ask Home Assistant again which entities carry the label
 COUNT       number of entities held
 LASTERROR   reason for the most recent failure
 VERSION     ami2ha version string
 QUIT        exit the application
 ```
 
-`CONNECT`, `DISCONNECT` and `REFRESH` are not implemented.
+`REFRESH` returns as soon as the question is sent; what it found appears in
+the status line (or on stdout without a window). It fails with RC 10 when
+the dashboard has no `label`, or the link is down.
+
+`CONNECT` and `DISCONNECT` are not implemented.
 
 ## The port name
 

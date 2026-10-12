@@ -122,6 +122,7 @@ static void ui_libs_close(void)
 #define ID_QUIT        1
 #define ID_RECONNECT   2
 #define ID_ABOUT       3
+#define ID_REFRESH     4
 #define ID_WIDGET_BASE 1000
 /*
  * A media widget has a row of transport buttons rather than one control, so
@@ -1217,6 +1218,11 @@ static a2h_ui *ui_build(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
                     MUIA_Menuitem_Title, (IPTR)"Reconnect",
                     MUIA_Menuitem_Shortcut, (IPTR)"R",
                     MUIA_UserData, (IPTR)ID_RECONNECT,
+                    TAG_DONE),
+                MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
+                    MUIA_Menuitem_Title, (IPTR)"Refresh entities",
+                    MUIA_Menuitem_Shortcut, (IPTR)"E",
+                    MUIA_UserData, (IPTR)ID_REFRESH,
                     TAG_DONE),
                 MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menuitem,
                     MUIA_Menuitem_Title, (IPTR)"About...",
@@ -2514,6 +2520,27 @@ static void ui_reconnect_now(a2h_ui *ui)
     try_reconnect(ui);
 }
 
+/*
+ * Ask Home Assistant again which entities carry the label, for someone who
+ * has just labelled more and does not want to restart. The answer arrives
+ * later and leaves its note in the status line; the layout is never
+ * touched, so the newcomers wait in the settings window until placed.
+ */
+static void ui_refresh_labels(a2h_ui *ui)
+{
+    if (!ui->ha->label[0]) {
+        ui_flash_status(ui, "This dashboard has no label to refresh");
+        return;
+    }
+    if (!ha_client_refresh_label(ui->ha)) {
+        ui_flash_status(ui, "Not connected -- nothing to refresh");
+        return;
+    }
+    ui_set_status(ui, "Asking Home Assistant for labelled entities...");
+    if (!flush_output(ui))
+        connection_lost(ui, "Send failed");
+}
+
 /* ------------------------------------------------------------------ *
  * Event loop
  * ------------------------------------------------------------------ */
@@ -2647,6 +2674,11 @@ int ui_run(a2h_ui *ui)
 
         if (id == ID_RECONNECT) {
             ui_reconnect_now(ui);
+            continue;
+        }
+
+        if (id == ID_REFRESH) {
+            ui_refresh_labels(ui);
             continue;
         }
 

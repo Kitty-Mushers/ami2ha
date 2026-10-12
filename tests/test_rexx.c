@@ -286,6 +286,37 @@ static void test_lasterror(void)
     ha_client_free(&c);
 }
 
+static void test_refresh(void)
+{
+    ha_client c;
+    char      r[256], e[REXX_ERR_MAX];
+
+    /* No label, nothing to ask. */
+    setup(&c);
+    CHECK_INT(run(&c, "REFRESH", r, sizeof r, e, sizeof e, NULL),
+              REXX_RC_ERROR);
+    CHECK(strstr(e, "no label") != NULL);
+    ha_client_free(&c);
+
+    /* With one, the question goes out on the live connection. */
+    setup(&c);
+    ha_client_set_label(&c, "amiga");
+    CHECK_INT(run(&c, "refresh", r, sizeof r, e, sizeof e, NULL), REXX_RC_OK);
+    CHECK_INT(c.label_refreshing, 1);
+    CHECK_INT(c.state, HA_ST_READY);
+    CHECK(ha_client_out(&c)->len > 0);
+    ha_client_free(&c);
+
+    /* Not while the link is down. */
+    setup(&c);
+    ha_client_set_label(&c, "amiga");
+    c.state = HA_ST_LOADING;
+    CHECK_INT(run(&c, "REFRESH", r, sizeof r, e, sizeof e, NULL),
+              REXX_RC_ERROR);
+    CHECK(strstr(e, "not connected") != NULL);
+    ha_client_free(&c);
+}
+
 void suite_rexx(void)
 {
     RUN(test_get);
@@ -297,4 +328,5 @@ void suite_rexx(void)
     RUN(test_errors);
     RUN(test_arexx_uppercases_arguments);
     RUN(test_lasterror);
+    RUN(test_refresh);
 }

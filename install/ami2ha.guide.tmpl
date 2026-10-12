@@ -590,13 +590,21 @@ that work rather than fail.
 @{b}Project -> Settings@{ub}, or right-Amiga S.
 
 The rest of that menu: @{b}Reconnect@{ub} (right-Amiga R) drops the
-connection and makes a new one, @{b}About@{ub} (right-Amiga A) names the
-version, and @{b}Quit@{ub} is right-Amiga Q.
+connection and makes a new one, @{b}Refresh entities@{ub} (right-Amiga E)
+is described below, @{b}About@{ub} (right-Amiga A) names the version, and
+@{b}Quit@{ub} is right-Amiga Q.
 
-Reconnect is worth knowing about for one job in particular: ami2ha asks
-Home Assistant which entities carry your label when it connects, so an
-entity you have just labelled is not there yet. Reconnect picks it up
-without restarting the program.
+@{b}Refresh entities@{ub} is for when you have just labelled something
+in Home Assistant. ami2ha asks which entities carry your label when it
+connects, so a newly labelled one is not there yet; Refresh asks again,
+without dropping the connection, and the status line says what it found:
+
+  @{i}2 new labelled entities -- see Settings@{ui}
+
+They are not put on the dashboard for you -- a layout you arranged stays
+as you left it. Open Settings and they are waiting in the list of
+available entities. The note also counts anything the dashboard shows
+that the label no longer names. The ARexx command REFRESH does the same.
 
   @{b}Group@{ub}       which group you are editing. New group and Delete
                 group work on this one; Name renames it.
@@ -696,6 +704,7 @@ AMI2HA.1, and so on.
   ON <id> / OFF <id>        set it
   CALL <domain> <service> [ENTITY <id>] [DATA <json>]
   STATUS                    connection state, version, entity count
+  REFRESH                   ask again which entities carry the label
   COUNT                     how many entities are held
   LASTERROR                 why the last command failed
   VERSION                   the ami2ha version

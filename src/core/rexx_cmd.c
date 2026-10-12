@@ -275,6 +275,25 @@ static int cmd_status(ha_client *c, a2h_buf *out)
     return REXX_RC_OK;
 }
 
+/*
+ * Ask Home Assistant again which entities carry the label. The answer comes
+ * later, through the same path as on connect, so this only says whether
+ * the question went out; the outcome lands in the status line, or on
+ * stdout without a window.
+ */
+static int cmd_refresh(ha_client *c, char *err, size_t errsz)
+{
+    if (!c->label[0]) {
+        rx_err(err, errsz, "no label to refresh: the dashboard sets none",
+               NULL);
+        return REXX_RC_ERROR;
+    }
+    if (!need_ready(c, err, errsz))
+        return REXX_RC_ERROR;
+    ha_client_refresh_label(c);
+    return REXX_RC_OK;
+}
+
 int rexx_execute(ha_client *c, const char *line, a2h_buf *out,
                  char *err, size_t errsz, int *quit)
 {
@@ -302,6 +321,7 @@ int rexx_execute(ha_client *c, const char *line, a2h_buf *out,
     if (rx_is(cmd, "OFF"))     return cmd_switch(c, &s, 0, err, errsz);
     if (rx_is(cmd, "CALL"))    return cmd_call(c, &s, err, errsz);
     if (rx_is(cmd, "STATUS"))  return cmd_status(c, out);
+    if (rx_is(cmd, "REFRESH")) return cmd_refresh(c, err, errsz);
     if (rx_is(cmd, "COUNT")) {
         buf_printf(out, "%lu", (unsigned long)ha_store_count(&c->store));
         return REXX_RC_OK;
