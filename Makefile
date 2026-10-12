@@ -98,6 +98,14 @@ DISTLHA     := dist/$(DISTNAME).lha
 
 all: dirs $(TARGET)
 
+# vbcc writes no dependency files, so every object depends on every header.
+# Coarse, and a header change rebuilds the lot -- which is the point.
+# Without it, adding a field to a struct recompiled only the files that
+# were touched alongside it, the rest went on using the old layout, and
+# the result was a Guru Meditation on real hardware.
+HDR         := $(wildcard include/ami2ha/*.h) $(wildcard src/*/*.h)
+$(OBJ): $(HDR)
+
 # Nothing outside version.h should name a version. 0.1.1 shipped with a
 # guide that still said 0.1, because three files carried it by hand; the
 # templates fixed those, but a stray archive name in the README would go
