@@ -203,6 +203,11 @@ labelled `Einfahrt` saves as `Einfahrt-20260828-102900.jpg`. Snapshots go to
 savedir    Work:ami2ha-shots
 ```
 
+**Save at 1280x720**, on the same menu, asks Home Assistant for a new, larger
+frame and saves it without decoding it on the Amiga — Home Assistant does the
+scaling. Choose the size with `savesize 1920 1080`, or `savesize native` for
+the camera's full resolution.
+
 A dashboard larger than the screen scrolls — the window opens at most of the
 screen with scrollbars and the status line stays visible. That happens only
 when it is needed, so a dashboard that fits has no scrollbars around it.

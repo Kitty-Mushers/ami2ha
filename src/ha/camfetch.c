@@ -59,7 +59,7 @@ static int fail(camfetch *f, const char *why)
 
 int camfetch_start(camfetch *f, const ha_config *cfg, const char *entity,
                    int width, int height, const char *file, int widget,
-                   long now)
+                   long max_bytes, long now)
 {
     char path[240];
     int  rc;
@@ -76,6 +76,8 @@ int camfetch_start(camfetch *f, const ha_config *cfg, const char *entity,
     f->port = cfg->port;
     f->tls  = cfg->tls;
     snprintf(f->file, sizeof f->file, "%s", file);
+    f->body_len = 0;
+    f->limit    = max_bytes > 0 ? max_bytes : CAM_MAX_BYTES;
 
     if (!cfg->token[0]) {
         snprintf(f->err, sizeof f->err, "no access token");
@@ -83,8 +85,11 @@ int camfetch_start(camfetch *f, const ha_config *cfg, const char *entity,
         return 0;
     }
 
-    snprintf(path, sizeof path,
-             "/api/camera_proxy/%s?width=%d&height=%d", entity, width, height);
+    if (width > 0 && height > 0)
+        snprintf(path, sizeof path, "/api/camera_proxy/%s?width=%d&height=%d",
+                 entity, width, height);
+    else
+        snprintf(path, sizeof path, "/api/camera_proxy/%s", entity);
 
     if (!http_build_get(&f->out, cfg->host, cfg->port, path, cfg->token)) {
         snprintf(f->err, sizeof f->err, "out of memory");
@@ -121,7 +126,8 @@ static int write_file(camfetch *f, const unsigned char *body, size_t len)
     if (wrote != (LONG)len)
         return fail(f, "the snapshot file could not be written in full");
 
-    f->state = CAMF_DONE;
+    f->body_len = len;
+    f->state    = CAMF_DONE;
     return 1;
 }
 
@@ -188,7 +194,7 @@ int camfetch_service(camfetch *f, int readable, int writable, long now)
                 return fail(f, "the connection failed while reading");
 
             if (got > 0) {
-                if ((long)f->in.len + got > CAM_MAX_BYTES)
+                if ((long)f->in.len + got > f->limit)
                     return fail(f, "the snapshot is too large");
                 if (!buf_append(&f->in, chunk, (size_t)got))
                     return fail(f, "out of memory");

@@ -543,6 +543,20 @@ that work rather than fail.
   that is on screen rather than fetching a new one, so what you save is what
   you were looking at, and the status line names the file it wrote.
 
+  The tile's frame is only as big as the tile. For a picture worth keeping
+  or passing on, choose @{b}Save at 1280x720@{ub} instead: it asks Home
+  Assistant for a new frame at that size -- Home Assistant does the scaling
+  -- and writes it straight to the drawer without showing it, so it is a
+  few seconds newer than the tile. If a tile is being fetched just then, it
+  waits its turn. The size is yours to choose:
+
+    savesize   1920 1080
+    savesize   native
+
+  @{i}native@{ui} is the camera's own resolution, which on a 4K camera is a
+  file of a megabyte or more. 720p is the default because pictures get
+  passed on, and not everyone has a machine that wants a 4K frame.
+
   They go in @{b}PROGDIR:snapshots@{ub} -- a drawer beside the program, made
   on the first save -- named after the tile's label and the time, like
   @{b}Einfahrt-20260828-102900.jpg@{ub}, so the drawer reads the way the

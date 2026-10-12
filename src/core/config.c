@@ -15,6 +15,8 @@ void cfg_init(a2h_config *cfg)
     cfg->columns      = 1;
     cfg->refresh_secs = 60;
     cfg->tls_verify   = 1;   /* only ever turned off deliberately */
+    cfg->save_w       = CFG_SAVE_W;
+    cfg->save_h       = CFG_SAVE_H;
 }
 
 void cfg_free(a2h_config *cfg)
@@ -639,6 +641,23 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
                     copy_str(cfg->savedir, sizeof cfg->savedir, tok);
                 else
                     cfg_fail(&s, "expected a directory after", "savedir");
+            } else if (strcmp(tok, "savesize") == 0) {
+                long w, h;
+                int  have = next_token(&s, tok, sizeof tok);
+
+                if (have && strcmp(tok, "native") == 0) {
+                    cfg->save_w = cfg->save_h = 0;
+                } else if (have && parse_long(tok, &w) &&
+                           w >= 16 && w <= 8192 &&
+                           next_token(&s, tok, sizeof tok) &&
+                           parse_long(tok, &h) && h >= 16 && h <= 8192) {
+                    cfg->save_w = (int)w;
+                    cfg->save_h = (int)h;
+                } else {
+                    cfg_fail(&s, "expected a width and height, or native, "
+                                 "after", "savesize");
+                    break;
+                }
             } else if (strcmp(tok, "tokenfile") == 0) {
                 if (next_token(&s, tok, sizeof tok))
                     copy_str(cfg->tokenfile, sizeof cfg->tokenfile, tok);
@@ -1011,6 +1030,10 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
         buf_printf(out, "tokenfile  %s\n", cfg->tokenfile);
     if (cfg->savedir[0])
         buf_printf(out, "savedir    %s\n", cfg->savedir);
+    if (cfg->save_w <= 0 || cfg->save_h <= 0)
+        buf_printf(out, "savesize   native\n");
+    else if (cfg->save_w != CFG_SAVE_W || cfg->save_h != CFG_SAVE_H)
+        buf_printf(out, "savesize   %d %d\n", cfg->save_w, cfg->save_h);
     /* Preserved only if it was already in the file; TOKENFILE is preferred. */
     if (cfg->token[0])
         buf_printf(out, "token      %s\n", cfg->token);

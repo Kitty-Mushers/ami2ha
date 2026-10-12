@@ -16,6 +16,7 @@
  *   tlsverify  yes         # no only for a self-signed certificate
  *   tokenfile  S:ha.token
  *   savedir    Work:ami2ha-shots
+ *   savesize   1280 720    # a camera's "Save at" size; or native
  *   columns    2
  *
  *   group "Wohnzimmer"          # placed in a column automatically
@@ -54,6 +55,8 @@
 /* Bounds exist to keep a mistyped or hostile file from exhausting memory. */
 #define CFG_MAX_GROUPS   32
 #define CFG_MAX_COLUMNS  8
+#define CFG_SAVE_W       1280   /* savesize when the file says nothing */
+#define CFG_SAVE_H       720
 #define CFG_MAX_WIDGETS  128
 
 /* Widgets are allocated in blocks of this many as the file is read. */
@@ -160,6 +163,13 @@ typedef struct {
      * the one that was read.
      */
     char savedir[CFG_PATH_MAX];
+    /*
+     * The size a camera's "Save at ..." asks Home Assistant for, which
+     * scales it on the server. 1280x720 by default: large enough to keep,
+     * and kind to whoever the picture is passed on to on a smaller
+     * machine. 0x0 is the camera's native frame, `savesize native`.
+     */
+    int  save_w, save_h;
     char token[CFG_TOKEN_MAX];
     /*
      * When set, the entities come from Home Assistant: everything tagged

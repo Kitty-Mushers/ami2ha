@@ -1237,6 +1237,56 @@ static void test_move_group_survives_a_write(void)
     cfg_free(&cfg);
 }
 
+static void test_savesize(void)
+{
+    a2h_config cfg, back;
+    char       err[CFG_ERR_MAX];
+    a2h_buf    out;
+
+    /* 720p unless the file says otherwise, and then not written back. */
+    CHECK(parse(&cfg, "host h\n", err, sizeof err));
+    CHECK_INT(cfg.save_w, 1280);
+    CHECK_INT(cfg.save_h, 720);
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(strstr(buf_cstr(&out), "savesize") == NULL);
+    buf_free(&out);
+    cfg_free(&cfg);
+
+    CHECK(parse(&cfg, "savesize 1920 1080\n", err, sizeof err));
+    CHECK_INT(cfg.save_w, 1920);
+    CHECK_INT(cfg.save_h, 1080);
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(parse(&back, buf_cstr(&out), err, sizeof err));
+    CHECK_INT(back.save_w, 1920);
+    CHECK_INT(back.save_h, 1080);
+    buf_free(&out);
+    cfg_free(&back);
+    cfg_free(&cfg);
+
+    /* The camera's own frame. */
+    CHECK(parse(&cfg, "savesize native\n", err, sizeof err));
+    CHECK_INT(cfg.save_w, 0);
+    CHECK_INT(cfg.save_h, 0);
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(strstr(buf_cstr(&out), "savesize   native") != NULL);
+    buf_free(&out);
+    cfg_free(&cfg);
+
+    /* Half a size, nonsense, or nothing at all is a mistake to name. */
+    CHECK(!parse(&cfg, "savesize 1280\n", err, sizeof err));
+    CHECK(strstr(err, "savesize") != NULL);
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "savesize big\n", err, sizeof err));
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "savesize\n", err, sizeof err));
+    cfg_free(&cfg);
+    CHECK(!parse(&cfg, "savesize 4 4\n", err, sizeof err));
+    cfg_free(&cfg);
+}
+
 void suite_config(void)
 {
     RUN(test_globals);
@@ -1286,4 +1336,5 @@ void suite_config(void)
     RUN(test_place_groups_empty_group_takes_no_room);
     RUN(test_move_group);
     RUN(test_move_group_survives_a_write);
+    RUN(test_savesize);
 }

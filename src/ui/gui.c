@@ -129,8 +129,9 @@ static void ui_libs_close(void)
  * it needs several return IDs per widget: MEDIA_BASE + widget * MEDIA_STRIDE
  * + action. Above the widget range, and tested before it.
  */
-/* One per camera widget: the Save item on its context menu. */
+/* One per camera widget: the Save items on its context menu. */
 #define ID_CAMSAVE_BASE 50000
+#define ID_CAMFULL_BASE 75000
 
 #define ID_MEDIA_BASE  100000
 #define ID_MEDIA_STRIDE 8
@@ -224,6 +225,7 @@ typedef struct {
      */
     Object *cam_menu;
     Object *cam_save;
+    Object *cam_full;   /* Save full size */
     int     cam_slot;   /* which of the two files the picture on screen holds */
     int     cam_want;   /* the file the fetch in flight is writing to        */
 
@@ -299,6 +301,18 @@ struct a2h_ui {
      * machine that has trouble with one.
      */
     camfetch    cam;
+
+    /*
+     * A full-size save: the fetch above is writing to full_dest rather than
+     * to a tile's file, and nothing is to be decoded when it lands.
+     * full_pending is the widget + 1 of one waiting for the fetcher.
+     */
+    int         full_active;
+    int         full_pending;
+    char        save_size[20];   /* "1280x720" or "full size", for messages */
+    char        save_title[40];  /* the menu item: "Save at 1280x720"       */
+    char        full_dest[CFG_PATH_MAX + 64];
+    char        full_name[64];
 
     a2h_rexx   *rexx;   /* borrowed; may be NULL */
     Object     *root;   /* holds the group boxes; rebuilt by the editor */
@@ -638,16 +652,26 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
             MUIA_Menuitem_Title, (IPTR)"Save snapshot",
             MUIA_UserData,       (IPTR)(ID_CAMSAVE_BASE + index),
             TAG_DONE);
+        uw->cam_full = MUI_NewObject(MUIC_Menuitem,
+            MUIA_Menuitem_Title, (IPTR)ui->save_title,
+            MUIA_UserData,       (IPTR)(ID_CAMFULL_BASE + index),
+            TAG_DONE);
         uw->cam_menu = MUI_NewObject(MUIC_Menustrip,
             MUIA_Family_Child, (IPTR)MUI_NewObject(MUIC_Menu,
                 MUIA_Menu_Title, (IPTR)w->label,
                 MUIA_Family_Child, (IPTR)uw->cam_save,
+                uw->cam_full ? MUIA_Family_Child : TAG_IGNORE,
+                    (IPTR)uw->cam_full,
                 TAG_DONE),
             TAG_DONE);
-        if (uw->cam_menu && uw->cam_save)
+        if (uw->cam_menu && uw->cam_save) {
             set(uw->control, MUIA_ContextMenu, (IPTR)uw->cam_menu);
-        else
-            uw->cam_menu = uw->cam_save = NULL;
+        } else {
+            /* Not attached to a menu, so ours to free. */
+            if (!uw->cam_menu && uw->cam_full)
+                MUI_DisposeObject(uw->cam_full);
+            uw->cam_menu = uw->cam_save = uw->cam_full = NULL;
+        }
 
         /*
          * The caption goes under the picture, in the same cell, rather than
@@ -899,6 +923,12 @@ static void bind_controls(a2h_ui *ui)
                          (IPTR)ui->widgets[i].cam_save,
                          (IPTR)ui->app, 2,
                          MUIM_Application_ReturnID, ID_CAMSAVE_BASE + i);
+            if (ui->widgets[i].cam_full)
+                DoMethod(ui->widgets[i].control, MUIM_Notify,
+                         MUIA_ContextMenuTrigger,
+                         (IPTR)ui->widgets[i].cam_full,
+                         (IPTR)ui->app, 2,
+                         MUIM_Application_ReturnID, ID_CAMFULL_BASE + i);
         }
 
     }
@@ -925,6 +955,16 @@ static void build_groups(a2h_ui *ui)
     if (ncols > CFG_MAX_COLUMNS) ncols = CFG_MAX_COLUMNS;
 
     cfg_place_groups(ui->cfg, col_of);
+
+    /* Every camera's menu names the size it saves at; built here so a
+     * rebuild after the settings change picks up a new one. */
+    if (ui->cfg->save_w > 0 && ui->cfg->save_h > 0)
+        snprintf(ui->save_size, sizeof ui->save_size, "%dx%d",
+                 ui->cfg->save_w, ui->cfg->save_h);
+    else
+        strcpy(ui->save_size, "full size");
+    snprintf(ui->save_title, sizeof ui->save_title, "Save at %s",
+             ui->save_size);
 
     row = MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE, TAG_DONE);
     if (!row)
@@ -1028,6 +1068,7 @@ static void free_context_menus(a2h_ui *ui)
             MUI_DisposeObject(ui->widgets[i].cam_menu);
         ui->widgets[i].cam_menu = NULL;
         ui->widgets[i].cam_save = NULL;
+        ui->widgets[i].cam_full = NULL;
     }
 }
 
@@ -1794,24 +1835,19 @@ static void stamp_now(a2h_ui *ui, int i)
 }
 
 /*
- * Keep the picture that is on screen. The snapshot is already a file -- the
- * fetch wrote it and the datatype is still reading from it -- so this is a
- * copy, not a re-encode, and it keeps whichever frame the user is looking at
- * rather than fetching a newer one behind their back.
- *
- * Reading the displayed slot is safe: the datatype's lock stops it being
- * written, not read.
+ * Where a saved picture of camera `i` goes: the leaf name into `name`, the
+ * whole path into `dest`. The drawer is made if it is not there yet -- a
+ * save should not fail on a folder. Says why in the status line and
+ * returns 0 when there is nowhere to put it.
  */
-static void camera_save(a2h_ui *ui, int i)
+static int save_target(a2h_ui *ui, int i, char *dest, size_t destsz,
+                       char *name, size_t namesz)
 {
-    const a2h_widget *w;
-    ui_widget        *uw;
-    char  src[64], dest[CFG_PATH_MAX + 64], name[64], stem[CFG_LABEL_MAX];
+    const a2h_widget *w = &ui->cfg->widgets[i];
+    char  stem[CFG_LABEL_MAX];
     struct DateStamp ds;
     struct ClockData cd;
-    BPTR  in, out;
-    char *buf;
-    long  got;
+    BPTR  lock;
     /*
      * Unconfigured, snapshots go in a drawer beside the program: it always
      * exists, it survives a reboot, and it is where someone would look for
@@ -1821,18 +1857,6 @@ static void camera_save(a2h_ui *ui, int i)
      */
     const char *dir = ui->cfg->savedir[0] ? ui->cfg->savedir
                                           : "PROGDIR:snapshots";
-
-    if (i < 0 || i >= ui->nwidgets)
-        return;
-    w  = &ui->cfg->widgets[i];
-    uw = &ui->widgets[i];
-
-    if (w->kind != W_CAMERA)
-        return;
-    if (!uw->pic.dt) {
-        ui_flash_status(ui, "No picture to save yet");
-        return;
-    }
 
     /*
      * The label, not the entity: the drawer should read "Einfahrt-..." the
@@ -1859,15 +1883,66 @@ static void camera_save(a2h_ui *ui, int i)
      * it any hope of a script recognising it. The date and time are worth 16
      * and the extension 4, so the label gets the remaining 10.
      */
-    snprintf(name, sizeof name, "%.10s-%04d%02d%02d-%02d%02d%02d.jpg",
+    snprintf(name, namesz, "%.10s-%04d%02d%02d-%02d%02d%02d.jpg",
              stem, (int)cd.year, (int)cd.month, (int)cd.mday,
              (int)cd.hour, (int)cd.min, (int)cd.sec);
 
-    snprintf(dest, sizeof dest, "%s", dir);
-    if (!AddPart((STRPTR)dest, (STRPTR)name, sizeof dest)) {
+    snprintf(dest, destsz, "%s", dir);
+    if (!AddPart((STRPTR)dest, (STRPTR)name, destsz)) {
         ui_flash_status(ui, "The savedir path is too long");
+        return 0;
+    }
+
+    /*
+     * CreateDir hands back a *lock* on what it made, not a success flag.
+     * Treating it as a boolean leaves the directory locked for as long as
+     * the program runs, which shows up as "object is in use" from List and
+     * "directory not available, error 205" from Directory Opus -- a folder
+     * that plainly exists and cannot be opened.
+     */
+    lock = Lock((STRPTR)dir, ACCESS_READ);
+    if (!lock)
+        lock = CreateDir((STRPTR)dir);
+    if (!lock) {
+        ui_flash_status(ui, "Could not make the savedir drawer");
+        return 0;
+    }
+    UnLock(lock);
+    return 1;
+}
+
+/*
+ * Keep the picture that is on screen. The snapshot is already a file -- the
+ * fetch wrote it and the datatype is still reading from it -- so this is a
+ * copy, not a re-encode, and it keeps whichever frame the user is looking at
+ * rather than fetching a newer one behind their back.
+ *
+ * Reading the displayed slot is safe: the datatype's lock stops it being
+ * written, not read.
+ */
+static void camera_save(a2h_ui *ui, int i)
+{
+    const a2h_widget *w;
+    ui_widget        *uw;
+    char  src[64], dest[CFG_PATH_MAX + 64], name[64];
+    BPTR  in, out;
+    char *buf;
+    long  got;
+
+    if (i < 0 || i >= ui->nwidgets)
+        return;
+    w  = &ui->cfg->widgets[i];
+    uw = &ui->widgets[i];
+
+    if (w->kind != W_CAMERA)
+        return;
+    if (!uw->pic.dt) {
+        ui_flash_status(ui, "No picture to save yet");
         return;
     }
+
+    if (!save_target(ui, i, dest, sizeof dest, name, sizeof name))
+        return;
 
     snapshot_path(src, sizeof src, i, uw->cam_slot);
 
@@ -1878,23 +1953,6 @@ static void camera_save(a2h_ui *ui, int i)
     }
 
     out = Open((STRPTR)dest, MODE_NEWFILE);
-    if (!out) {
-        /*
-         * Most likely the directory does not exist yet. Make it once and try
-         * again -- a save should not fail on a folder.
-         *
-         * CreateDir hands back a *lock* on what it made, not a success flag.
-         * Treating it as a boolean leaves the directory locked for as long as
-         * the program runs, which shows up as "object is in use" from List and
-         * "directory not available, error 205" from Directory Opus -- a folder
-         * that plainly exists and cannot be opened.
-         */
-        BPTR made = CreateDir((STRPTR)dir);
-        if (made) {
-            UnLock(made);
-            out = Open((STRPTR)dest, MODE_NEWFILE);
-        }
-    }
     if (!out) {
         Close(in);
         ui_flash_status(ui, "Could not write to savedir");
@@ -1929,6 +1987,85 @@ static void camera_save(a2h_ui *ui, int i)
     }
 }
 
+/*
+ * Save camera `i` larger than its tile. The tile holds a frame scaled for
+ * the dashboard -- 320x180, say -- which is fine to look at and poor to
+ * keep. So this asks Home Assistant for a new frame at `savesize`, 720p
+ * unless configured otherwise, and writes it straight into savedir. Home
+ * Assistant does the scaling, and the picture is never decoded here, so
+ * even `savesize native` on a 4K camera costs a megabyte or two of memory
+ * for as long as the transfer lasts and nothing else.
+ *
+ * 720p rather than native by default because the pictures get passed on:
+ * someone on a smaller machine has no use for a 4K frame, and no way to
+ * scale it down either.
+ *
+ * It is a newer frame than the one on screen, unavoidably. If another
+ * fetch is running it waits its turn rather than being turned away: with
+ * auto-refreshing tiles and a camera that takes ten seconds to wake, the
+ * fetcher is busy often enough that "try again" would be most answers.
+ */
+static void start_full_save(a2h_ui *ui, int i)
+{
+    const a2h_widget *w = &ui->cfg->widgets[i];
+    char              msg[128];
+
+    if (!save_target(ui, i, ui->full_dest, sizeof ui->full_dest,
+                     ui->full_name, sizeof ui->full_name))
+        return;
+
+    if (!camfetch_start(&ui->cam, &ui->ha->cfg, w->entity,
+                        ui->cfg->save_w, ui->cfg->save_h, ui->full_dest, i,
+                        CAM_FULL_MAX_BYTES, ui_now())) {
+        snprintf(msg, sizeof msg, "%s: %s", w->label,
+                 ui->cam.err[0] ? ui->cam.err : "could not start");
+        ui_flash_status(ui, msg);
+        return;
+    }
+    ui->full_active = 1;
+
+    snprintf(msg, sizeof msg, "Fetching %s at %s...", w->label,
+             ui->save_size);
+    ui_set_status(ui, msg);
+}
+
+static void camera_save_full(a2h_ui *ui, int i)
+{
+    if (i < 0 || i >= ui->nwidgets || ui->cfg->widgets[i].kind != W_CAMERA)
+        return;
+
+    if (camfetch_busy(&ui->cam)) {
+        ui->full_pending = i + 1;
+        ui_flash_status(ui, "Full-size save queued behind the fetch running");
+        return;
+    }
+    start_full_save(ui, i);
+}
+
+/* The full-size fetch ended, well or badly. */
+static void full_save_done(a2h_ui *ui, int ok)
+{
+    char msg[128];
+    int  i = ui->cam.widget;
+
+    ui->full_active = 0;
+    ui_set_status_connected(ui);
+
+    if (ok) {
+        snprintf(msg, sizeof msg, "Saved %s, %lu KB", ui->full_name,
+                 (unsigned long)((ui->cam.body_len + 1023) / 1024));
+    } else {
+        /* A body is only written once complete, but a short write can
+         * still leave part of one behind; the name is ours and new. */
+        DeleteFile((STRPTR)ui->full_dest);
+        snprintf(msg, sizeof msg, "%s: %s",
+                 (i >= 0 && i < ui->nwidgets) ? ui->cfg->widgets[i].label
+                                              : "Camera",
+                 ui->cam.err);
+    }
+    ui_flash_status(ui, msg);
+}
+
 /* Ask for a new frame for widget `i`, unless a fetch is already running. */
 static void request_snapshot(a2h_ui *ui, int i)
 {
@@ -1959,7 +2096,8 @@ static void request_snapshot(a2h_ui *ui, int i)
     snapshot_path(path, sizeof path, i, ui->widgets[i].cam_want);
 
     if (!camfetch_start(&ui->cam, &ui->ha->cfg, w->entity,
-                        w->cam_w, w->cam_h, path, i, ui_now())) {
+                        w->cam_w, w->cam_h, path, i, CAM_MAX_BYTES,
+                        ui_now())) {
         snprintf(msg, sizeof msg, "%s: %s", w->label,
                  ui->cam.err[0] ? ui->cam.err : "could not start");
         ui_flash_status(ui, msg);
@@ -2042,6 +2180,16 @@ static void camera_tick(a2h_ui *ui)
 
     if (camfetch_busy(&ui->cam))
         return;
+
+    /* Someone asked for this one; it goes before any tile's turn. */
+    if (ui->full_pending) {
+        i = ui->full_pending - 1;
+        ui->full_pending = 0;
+        if (i < ui->nwidgets && ui->cfg->widgets[i].kind == W_CAMERA) {
+            start_full_save(ui, i);
+            return;
+        }
+    }
 
     for (i = 0; i < ui->nwidgets; i++) {
         const a2h_widget *w  = &ui->cfg->widgets[i];
@@ -2703,8 +2851,13 @@ int ui_run(a2h_ui *ui)
             }
         }
 
-        if (id >= ID_CAMSAVE_BASE && id < ID_MEDIA_BASE) {
+        if (id >= ID_CAMSAVE_BASE && id < ID_CAMFULL_BASE) {
             camera_save(ui, (int)(id - ID_CAMSAVE_BASE));
+            continue;
+        }
+
+        if (id >= ID_CAMFULL_BASE && id < ID_MEDIA_BASE) {
+            camera_save_full(ui, (int)(id - ID_CAMFULL_BASE));
             continue;
         }
 
@@ -2784,7 +2937,10 @@ int ui_run(a2h_ui *ui)
             if (cam_busy) {
                 int r = camfetch_service(&ui->cam, cam_readable, cam_writable,
                                          ui_now());
-                if (r > 0) {
+                if (r != 0 && ui->full_active) {
+                    full_save_done(ui, r > 0);
+                    camfetch_cancel(&ui->cam);
+                } else if (r > 0) {
                     snapshot_arrived(ui);
                     camfetch_cancel(&ui->cam);
                 } else if (r < 0) {

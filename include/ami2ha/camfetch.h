@@ -27,6 +27,14 @@
 /* Anything larger is not a dashboard tile and would only eat memory. */
 #define CAM_MAX_BYTES (256L * 1024L)
 
+/*
+ * A frame fetched to be saved rather than shown -- at the configured save
+ * size, or the camera's native one, which on a 4K camera runs to a megabyte
+ * or two. It is buffered whole and written once, never decoded, so this is
+ * about memory and nothing else.
+ */
+#define CAM_FULL_MAX_BYTES (6L * 1024L * 1024L)
+
 typedef enum {
     CAMF_IDLE = 0,
     CAMF_CONNECTING,
@@ -45,6 +53,8 @@ typedef struct {
     int        widget;   /* which dashboard widget asked         */
     char       file[CAM_PATH_MAX];
     char       err[CAM_ERR_MAX];
+    long       limit;    /* CAM_MAX_BYTES, or CAM_FULL_MAX_BYTES */
+    size_t     body_len; /* bytes of picture written, once DONE  */
     /*
      * Enough of the server to dial it again without the caller's help. A
      * dropped TLS handshake has to be retried from inside the fetch: Home
@@ -68,10 +78,16 @@ void camfetch_init(camfetch *f);
  * Both dimensions are always sent: Home Assistant ignores a width on its
  * own and returns the camera's native frame, which is five times the bytes
  * and far more decoding than a tile needs.
+ *
+ * A width or height of 0 asks for exactly that native frame.
+ *
+ * `max_bytes` caps the reply: CAM_MAX_BYTES for a tile, CAM_FULL_MAX_BYTES
+ * for a save. It is the caller's to say because the size cannot: a tile
+ * may be as large as a modest save, but a tile is decoded and a save is not.
  */
 int camfetch_start(camfetch *f, const ha_config *cfg, const char *entity,
                    int width, int height, const char *file, int widget,
-                   long now);
+                   long max_bytes, long now);
 
 /*
  * Move the transfer along. Returns 0 while still working, 1 when the file
