@@ -548,14 +548,40 @@ that work rather than fail.
   Assistant for a new frame at that size -- Home Assistant does the scaling
   -- and writes it straight to the drawer without showing it, so it is a
   few seconds newer than the tile. If a tile is being fetched just then, it
-  waits its turn. The size is yours to choose:
+  waits its turn. The menu always names the size it will save at.
 
-    savesize   1920 1080
-    savesize   native
+@{b}Choosing the save size@{ub}
 
-  @{i}native@{ui} is the camera's own resolution, which on a 4K camera is a
-  file of a megabyte or more. 720p is the default because pictures get
-  passed on, and not everyone has a machine that wants a 4K frame.
+  The Amiga does not scale pictures; Home Assistant does, on the way out.
+  So the size in the file is the size of every picture saved, and the
+  question worth asking is where those pictures will be looked at. A
+  picture bigger than the screen it is opened on is not more detail, it is
+  a picture you have to scroll around -- or one whose viewer puts its
+  buttons off the bottom of the screen.
+
+    savesize   1280 720     the default
+    savesize   960 540      for a 1280x720 Workbench
+    savesize   1920 1080    for a large screen, or for keeping
+    savesize   native       the camera's own frame
+
+  @{b}1280x720@{ub} is the default because pictures get passed on -- to a
+  chat, to a friend -- and the people on the other end are on Amigas too,
+  most of them with screens no bigger than that and no way to scale a
+  picture down. It is large enough to be worth saving and small enough to
+  open anywhere.
+
+  Set it per machine, to fit the smallest screen the pictures are meant
+  for. On a 1280x720 Workbench, 720p fills the whole screen and the window
+  around it no longer fits, so @{b}960x540@{ub} is the better choice there.
+  On a 1920x1080 screen, 1280x720 leaves room to spare.
+
+  @{b}native@{ub} is for keeping rather than showing: the camera's full
+  resolution, which on a 4K camera is a file of a megabyte or more. It is
+  fetched and written but never decoded here, so even a small Amiga can
+  save one -- it only needs the memory to hold the file while it arrives.
+
+  Home Assistant keeps the camera's proportions, so a size that does not
+  match them comes back a little different from what was asked.
 
   They go in @{b}PROGDIR:snapshots@{ub} -- a drawer beside the program, made
   on the first save -- named after the tile's label and the time, like

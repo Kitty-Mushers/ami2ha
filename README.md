@@ -208,6 +208,11 @@ frame and saves it without decoding it on the Amiga — Home Assistant does the
 scaling. Choose the size with `savesize 1920 1080`, or `savesize native` for
 the camera's full resolution.
 
+Pick it per machine, for the smallest screen the pictures are meant for: the
+1280x720 default is chosen for passing pictures on to other Amigas, while on a
+1280x720 Workbench `savesize 960 540` keeps a saved picture, and the window
+it opens in, on screen.
+
 A dashboard larger than the screen scrolls — the window opens at most of the
 screen with scrollbars and the status line stays visible. That happens only
 when it is needed, so a dashboard that fits has no scrollbars around it.
