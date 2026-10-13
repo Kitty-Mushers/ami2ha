@@ -1287,6 +1287,41 @@ static void test_savesize(void)
     cfg_free(&cfg);
 }
 
+static void test_arrange_discovered(void)
+{
+    a2h_config cfg;
+    static const char *ids[] = {
+        "sensor.temp", "light.desk", "camera.yard", "scene.party",
+        "switch.printer", "cover.blind", "media_player.squeezer",
+        "sensor.rain", "light.strip", "script.water", "camera.drive"
+    };
+    int i;
+
+    cfg_init(&cfg);
+    for (i = 0; i < (int)(sizeof ids / sizeof ids[0]); i++)
+        CHECK(cfg_add_discovered(&cfg, ids[i], "amiga"));
+    CHECK_INT(cfg.ngroups, 1);
+
+    cfg_arrange_discovered(&cfg);
+
+    /* One group per kind, in a fixed order, each in Home Assistant's
+     * order -- and every widget inside the group it names. */
+    check_order(&cfg, "Lights,Switches,Covers,Scenes,Media,Sensors,Cameras",
+        "light.desk,light.strip,switch.printer,cover.blind,scene.party,"
+        "script.water,media_player.squeezer,sensor.temp,sensor.rain,"
+        "camera.yard,camera.drive");
+    CHECK_INT(cfg.nwidgets, 11);
+    cfg_free(&cfg);
+
+    /* Kinds that are not there get no group. */
+    cfg_init(&cfg);
+    CHECK(cfg_add_discovered(&cfg, "sensor.a", "amiga"));
+    CHECK(cfg_add_discovered(&cfg, "camera.b", "amiga"));
+    cfg_arrange_discovered(&cfg);
+    check_order(&cfg, "Sensors,Cameras", "sensor.a,camera.b");
+    cfg_free(&cfg);
+}
+
 void suite_config(void)
 {
     RUN(test_globals);
@@ -1337,4 +1372,5 @@ void suite_config(void)
     RUN(test_move_group);
     RUN(test_move_group_survives_a_write);
     RUN(test_savesize);
+    RUN(test_arrange_discovered);
 }

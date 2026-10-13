@@ -236,6 +236,19 @@ int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
                        const char *label);
 
 /*
+ * Sort a dashboard built by cfg_add_discovered into one group per kind of
+ * thing -- lights, switches, covers, scenes, media, sensors, cameras, in
+ * that order, each keeping the order Home Assistant gave -- instead of the
+ * single group discovery fills. Empty kinds get no group.
+ *
+ * Not only tidier. One group holding a whole label's worth of entities is
+ * taller than the screen, and MUI 3.8 does not draw a group taller than
+ * the visible part of a scrolling window: the frame and labels never
+ * appear, only the values that update themselves later.
+ */
+void cfg_arrange_discovered(a2h_config *cfg);
+
+/*
  * Decide which column each group goes in, writing a 0-based column index
  * per group into `col_of` (cfg->ngroups entries). A group pinned with
  * `column` goes where it says, clamped to the column count. The others

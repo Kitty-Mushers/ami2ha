@@ -245,6 +245,14 @@ typedef struct {
      * to switch the thing on.
      */
     Object *onoff;
+    /*
+     * Colour only, and only on a dashboard that scrolls: the window the
+     * colour control lives in instead of the dashboard. See W_COLOR.
+     */
+    Object *color_win;
+    char    color_title[CFG_LABEL_MAX];  /* its title: the window keeps the
+                                            pointer, and the configuration's
+                                            widgets can be reallocated */
     long    send_at;    /* ui_now() tick to send at; 0 when nothing is due */
     int     pending;    /* percent for a dimmer, packed 0xRRGGBB for colour */
     int     shown;      /* what the gadget last read as, to spot a change  */
@@ -278,6 +286,15 @@ struct a2h_ui {
     Object     *status;
     char        status_text[96];  /* what the line currently shows       */
     char        status_idle[96];  /* what it returns to                  */
+    /*
+     * The resting text is the "HA <version>, <n> entities" line, and the
+     * count it shows. Kept so the count can follow the store: it is taken
+     * when the link comes up, and a Home Assistant still starting answers
+     * that first moment with nothing -- which read "0 entities" for as
+     * long as the session lasted, beside readings plainly arriving.
+     */
+    int         status_is_count;
+    unsigned long status_count;
     long        status_until;     /* deadline in ticks, if status_timed  */
     int         status_timed;
 
@@ -309,6 +326,7 @@ struct a2h_ui {
      */
     int         full_active;
     int         full_pending;
+    int         scrolled;        /* the dashboard sits in a Scrollgroup */
     char        save_size[20];   /* "1280x720" or "full size", for messages */
     char        save_title[40];  /* the menu item: "Save at 1280x720"       */
     char        full_dest[CFG_PATH_MAX + 64];
@@ -563,6 +581,72 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
         uw->onoff  = make_onoff();
         if (!uw->control || !uw->onoff)
             return 0;
+
+        /*
+         * Not on a dashboard that scrolls. Coloradjust is built from the
+         * system's colorwheel and gradientslider gadgets, and boopsi
+         * gadgets cannot clip -- MUI says as much, and puts them out of
+         * bounds in virtual groups. Inside one it did worse than draw
+         * itself wrong: the whole visible dashboard lost its frames, its
+         * labels and its buttons, and only the values that later updated
+         * themselves ever appeared. A label on two dozen entities on an
+         * ordinary screen is exactly the dashboard that scrolls, so this
+         * was the first thing a new user saw.
+         *
+         * So there the wheel gets a window of its own, opened from a
+         * button in the row. A window is not a virtual group, and nothing
+         * else changes: the control is the same object, wired the same
+         * way, only somewhere else.
+         */
+        if (ui->scrolled) {
+            Object *btn = MUI_NewObject(MUIC_Text,
+                MUIA_Text_Contents, (IPTR)"Colour...",
+                MUIA_Text_PreParse, (IPTR)"\33c",
+                MUIA_Frame,         MUIV_Frame_Button,
+                MUIA_Background,    MUII_ButtonBack,
+                MUIA_InputMode,     MUIV_InputMode_RelVerify,
+                TAG_DONE);
+
+            snprintf(uw->color_title, sizeof uw->color_title, "%s",
+                     w->label);
+            uw->color_win = MUI_NewObject(MUIC_Window,
+                MUIA_Window_Title,       (IPTR)uw->color_title,
+                MUIA_Window_ScreenTitle, (IPTR)A2H_TITLE,
+                /* Left to its minimum, the wheel opens as a flat ellipse;
+                 * it fills whatever it is given, so give it a box about
+                 * as tall as it is wide once the R/G/B rows are off it. */
+                MUIA_Window_Width,       MUIV_Window_Width_Screen(20),
+                MUIA_Window_Height,      MUIV_Window_Height_Screen(35),
+                MUIA_Window_RootObject,  (IPTR)MUI_NewObject(MUIC_Group,
+                    MUIA_Group_Child, (IPTR)uw->control,
+                    TAG_DONE),
+                TAG_DONE);
+            if (!btn || !uw->color_win) {
+                /* Whatever was made and not handed on is ours to free;
+                 * the control went with the window if there was one. */
+                if (btn)           MUI_DisposeObject(btn);
+                if (uw->color_win) MUI_DisposeObject(uw->color_win);
+                else               MUI_DisposeObject(uw->control);
+                MUI_DisposeObject(uw->onoff);
+                uw->color_win = uw->control = uw->onoff = NULL;
+                return 0;
+            }
+            DoMethod(ui->app, OM_ADDMEMBER, (IPTR)uw->color_win);
+            DoMethod(btn, MUIM_Notify, MUIA_Pressed, FALSE,
+                     (IPTR)uw->color_win, 3,
+                     MUIM_Set, MUIA_Window_Open, TRUE);
+            DoMethod(uw->color_win, MUIM_Notify, MUIA_Window_CloseRequest,
+                     TRUE, (IPTR)uw->color_win, 3,
+                     MUIM_Set, MUIA_Window_Open, FALSE);
+
+            DoMethod(parent, OM_ADDMEMBER, (IPTR)make_label(w->label));
+            DoMethod(parent, OM_ADDMEMBER, (IPTR)MUI_NewObject(MUIC_Group,
+                MUIA_Group_Horiz, TRUE,
+                MUIA_Group_Child, (IPTR)uw->onoff,
+                MUIA_Group_Child, (IPTR)btn,
+                TAG_DONE));
+            return 1;
+        }
 
         /* The box sits outside the control, so a lamp that is off -- and
          * therefore greyed out -- can still be switched on. */
@@ -1072,6 +1156,27 @@ static void free_context_menus(a2h_ui *ui)
     }
 }
 
+/*
+ * The colour windows of a scrolling dashboard. They belong to the
+ * application rather than to the dashboard's object tree, so taking the
+ * dashboard down does not take them with it.
+ */
+static void free_color_windows(a2h_ui *ui)
+{
+    int i;
+
+    for (i = 0; i < ui->nwidgets; i++) {
+        Object *win = ui->widgets[i].color_win;
+
+        if (!win)
+            continue;
+        set(win, MUIA_Window_Open, FALSE);
+        DoMethod(ui->app, OM_REMMEMBER, (IPTR)win);
+        MUI_DisposeObject(win);
+        ui->widgets[i].color_win = NULL;
+    }
+}
+
 static int build_dashboard(a2h_ui *ui)
 {
     /* The widget table is indexed by configuration order, so it has to
@@ -1085,6 +1190,7 @@ static int build_dashboard(a2h_ui *ui)
     /* The old objects are gone by now, so nothing is drawing from these. */
     free_pictures(ui);
     free_context_menus(ui);
+    free_color_windows(ui);
     free(ui->widgets);
     ui->widgets  = fresh;
     ui->nwidgets = ui->cfg->nwidgets;
@@ -1174,6 +1280,7 @@ static a2h_ui *ui_build(a2h_config *cfg, ha_client *ha, a2h_socket *sock,
         return NULL;
     }
     camfetch_init(&ui->cam);
+    ui->scrolled = scrolled;
     ui->cfg  = cfg;
     ui->ha   = ha;
     ui->sock = sock;
@@ -1389,6 +1496,7 @@ void ui_dispose(a2h_ui *ui)
     ui->editor = NULL;
     camfetch_cancel(&ui->cam);
     if (ui->app) {
+        free_color_windows(ui);
         set(ui->win, MUIA_Window_Open, FALSE);
         MUI_DisposeObject(ui->app);
     }
@@ -1431,6 +1539,7 @@ void ui_set_status(a2h_ui *ui, const char *text)
 {
     if (!ui || !ui->status)
         return;
+    ui->status_is_count = 0;
     strncpy(ui->status_idle, text, sizeof ui->status_idle - 1);
     ui->status_idle[sizeof ui->status_idle - 1] = '\0';
     ui->status_timed = 0;
@@ -1743,6 +1852,8 @@ static void update_widget(a2h_ui *ui, int i, const ha_entity *e)
     }
 }
 
+static void status_follow_count(a2h_ui *ui);
+
 void ui_entity_changed(a2h_ui *ui, const ha_entity *e)
 {
     int i;
@@ -1755,6 +1866,8 @@ void ui_entity_changed(a2h_ui *ui, const ha_entity *e)
     for (i = 0; i < ui->nwidgets; i++)
         if (strcmp(ui->cfg->widgets[i].entity, e->entity_id) == 0)
             update_widget(ui, i, e);
+
+    status_follow_count(ui);
 }
 
 void ui_refresh_all(a2h_ui *ui)
@@ -2490,6 +2603,30 @@ void ui_set_status_connected(a2h_ui *ui)
             ui->ha->version[0] ? ui->ha->version : "?",
             (unsigned long)ha_store_count(&ui->ha->store));
     ui_set_status(ui, st);
+    ui->status_is_count = 1;
+    ui->status_count    = (unsigned long)ha_store_count(&ui->ha->store);
+}
+
+/*
+ * Keep the entity count in the resting text true as the store fills. A
+ * message being flashed is left to finish: only the text it returns to is
+ * brought up to date.
+ */
+static void status_follow_count(a2h_ui *ui)
+{
+    unsigned long n;
+
+    if (!ui->status_is_count)
+        return;
+    n = (unsigned long)ha_store_count(&ui->ha->store);
+    if (n == ui->status_count)
+        return;
+
+    ui->status_count = n;
+    snprintf(ui->status_idle, sizeof ui->status_idle, "HA %s, %lu entities",
+             ui->ha->version[0] ? ui->ha->version : "?", n);
+    if (!ui->status_timed)
+        status_show(ui, ui->status_idle);
 }
 
 /* Say what happened and arrange to try again, less eagerly each time. */

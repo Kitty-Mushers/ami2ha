@@ -311,6 +311,13 @@ supports rather than guessed at, so an RGB strip arrives as an RGB strip.
 A kind you wrote yourself is never overridden — `toggle light.strip` stays a
 checkmark even for a light that could do more.
 
+With only a `label` line, the dashboard is laid out for you: one group per
+kind — Lights, Switches, Covers, Scenes, Media, Sensors, Cameras — as a
+starting point to rearrange in the settings window. On a dashboard that
+scrolls, a colour light gets a **Colour…** button that opens the wheel in its
+own window: the wheel is made of system gadgets that MUI cannot draw inside a
+scrolling area.
+
 Labelled something new while ami2ha is running? **Project → Refresh
 entities** (right-Amiga E, or `REFRESH` over ARexx) asks Home Assistant
 again without dropping the connection. The status line says how many are new

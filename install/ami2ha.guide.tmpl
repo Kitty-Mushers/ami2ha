@@ -168,6 +168,14 @@ dozen. There are two ways to say which.
   later without touching the Amiga: label something new in Home
   Assistant, restart ami2ha, and there it is.
 
+  With nothing but the label in the configuration, ami2ha lays the
+  dashboard out itself: one group per kind of thing -- @{b}Lights@{ub},
+  @{b}Switches@{ub}, @{b}Covers@{ub}, @{b}Scenes@{ub}, @{b}Media@{ub},
+  @{b}Sensors@{ub}, @{b}Cameras@{ub} -- in that order, each in the order
+  Home Assistant lists them, and only the kinds you have. It is a starting
+  point: rearrange it in the settings window and save, and from then on
+  your arrangement is the one used.
+
 @{b}The explicit way: list them@{ub}
 
   Write the entity ids into the configuration file yourself. See
@@ -465,6 +473,13 @@ that work rather than fail.
   It is a tall gadget, so a colour light is a taller row than a lamp, and
   it asks the screen for pens, which is worth knowing on a 256-colour
   Workbench where pens are a finite resource.
+
+  On a dashboard too big for the screen -- the one that scrolls -- the
+  row has a @{b}Colour...@{ub} button instead, which opens the wheel in a
+  small window of its own. The wheel is built from system gadgets that
+  cannot be drawn inside a scrolling area: MUI rules it out, and when it
+  was tried anyway the whole dashboard lost its labels and frames. In its
+  own window it works exactly as it does in the row.
 
   One wart worth knowing: while the lamp is off, the wheel shows a colour
   of its own choosing rather than nothing. It cannot act on it -- the

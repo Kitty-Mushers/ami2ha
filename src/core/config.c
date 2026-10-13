@@ -833,6 +833,63 @@ int cfg_add_discovered(a2h_config *cfg, const char *entity_id,
     return 1;
 }
 
+/* Which of the discovered groups an entity belongs in, 0..6. */
+#define DISC_GROUPS 7
+
+static int discovered_group(const a2h_widget *w)
+{
+    const char *e = w->entity;
+
+    if (strncmp(e, "light.", 6) == 0)          return 0;
+    if (w->kind == W_COVER ||
+        strncmp(e, "cover.", 6) == 0)          return 2;
+    if (w->kind == W_BUTTON)                   return 3;
+    if (w->kind == W_MEDIA)                    return 4;
+    if (w->kind == W_CAMERA)                   return 6;
+    if (w->kind == W_TOGGLE)                   return 1;
+    return 5;
+}
+
+void cfg_arrange_discovered(a2h_config *cfg)
+{
+    static const char *titles[DISC_GROUPS] = {
+        "Lights", "Switches", "Covers", "Scenes", "Media", "Sensors",
+        "Cameras"
+    };
+    a2h_widget *sorted;
+    int         g, i, n = 0;
+
+    if (cfg->nwidgets == 0)
+        return;
+    sorted = (a2h_widget *)malloc((size_t)cfg->nwidgets * sizeof *sorted);
+    if (!sorted)
+        return;                 /* the single group stays: ugly, not lost */
+
+    cfg->ngroups = 0;
+    for (g = 0; g < DISC_GROUPS; g++) {
+        a2h_group *grp = &cfg->groups[cfg->ngroups];
+        int        first = n;
+
+        for (i = 0; i < cfg->nwidgets; i++)
+            if (discovered_group(&cfg->widgets[i]) == g) {
+                sorted[n] = cfg->widgets[i];
+                sorted[n].group = cfg->ngroups;
+                n++;
+            }
+        if (n == first)
+            continue;
+
+        memset(grp, 0, sizeof *grp);
+        copy_str(grp->title, sizeof grp->title, titles[g]);
+        grp->first_widget = first;
+        grp->nwidgets     = n - first;
+        cfg->ngroups++;
+    }
+
+    memcpy(cfg->widgets, sorted, (size_t)n * sizeof *sorted);
+    free(sorted);
+}
+
 void cfg_refine_kinds(a2h_config *cfg, ha_store *store)
 {
     int i;

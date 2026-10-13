@@ -162,6 +162,7 @@ static void cb_discovered(ha_client *c, const char *const *ids, int n,
 
     for (i = 0; i < n; i++)
         cfg_add_discovered(a->dash, ids[i], a->dash->label);
+    cfg_arrange_discovered(a->dash);
 }
 
 static void cb_ready(ha_client *c, void *user)
