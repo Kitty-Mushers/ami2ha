@@ -388,6 +388,49 @@ that work rather than fail.
   them. A group pinned to a column the dashboard does not have goes in
   the last one, and keeps its number for when you add columns back.
 
+@{b}Tabs@{ub}
+
+  For things you look at less often: put a group on a tab of its own,
+  and it moves off the first page onto a page you switch to.
+
+    tab "Haus"
+    tab "Extras"
+
+    group "Wasser" tab "Extras"
+        button script.turn_on entity script.garten_bewaessern \
+               label "Blumen giessen"
+    end
+
+  The @{b}tab@{ub} lines list the pages in the order the tab bar shows
+  them. The first is the page shown at the start, and every group that
+  names no tab is on it -- so naming it renames the start page. Without
+  any tab lines that page is called @{b}Main@{ub}, and a dashboard with
+  only one page has no tab bar at all.
+
+  Easier than the file: the @{b}Layout@{ub} page of the
+  @{"settings window" link SETTINGS} lists the tabs -- new, rename,
+  delete, reorder -- and has a Tab choice for each group. Deleting a tab
+  moves its groups to the first page; nothing on the dashboard goes with
+  it.
+
+  Each page has its own columns: @{b}columns@{ub} applies to every page,
+  and the groups on a page are placed as if it were the only one.
+
+  The window is as wide as its widest page, hidden ones included. A page
+  full of long names makes every page that wide -- see the next part.
+
+@{b}Keep labels short@{ub}
+
+  An entity added without a label is shown under its friendly name from
+  Home Assistant, and those can be long: "Shellypstripg4 98a31679fb0c
+  output 3 power" is a real one. Each name is drawn in full, so the
+  longest one sets how narrow the window can get. On a 1280x720 screen
+  a few of them are enough to make the dashboard half as wide again.
+
+  So give long ones a short @{b}label@{ub} -- in the file, or on the
+  Entities page of the @{"settings window" link SETTINGS} under
+  Properties. "Steckdose 3" says as much on a dashboard you know.
+
 @{b}The status line@{ub}
 
   Along the bottom. Normally the server version and how many entities are
@@ -662,15 +705,43 @@ available entities. If something lost the label since ami2ha last asked,
 the note adds how many, as in "1 new labelled entity, 1 gone". The ARexx
 command REFRESH does the same.
 
-  @{b}Group@{ub}       which group you are editing, numbered in the order
-                they appear -- and with more than one column, which
-                column each lands in. New group and Delete group work on
-                this one; Name renames it.
+The window has two pages. @{b}Layout@{ub} is where things go: tabs,
+groups and columns. @{b}Entities@{ub} is what a group holds, and how each
+of its entities is shown. Save, Use and Cancel below cover both.
 
-  @{b}Move up, Move down@{ub}  move the group on show one place earlier or
-                later, its entities with it. Earlier means higher up its
-                column. The numbers in the Group list change as you click,
-                so you can see where it has got to before pressing Use.
+@{b}Layout@{ub}
+
+  @{b}Tabs@{ub}        the dashboard's pages, in tab-bar order. Name renames
+                the selected one (press Return); New adds one and puts
+                you straight into its name; Delete moves its groups to
+                the first page; Up and Down reorder. The first tab is the
+                start page, and holds every group not put on another.
+                See @{"Tabs" link DASHBOARD}.
+
+  @{b}Columns@{ub}     how many columns each page has.
+
+  @{b}Groups@{ub}      the groups on the tab selected on the left, numbered
+                in the order they show there, and -- with more than one
+                column -- the column each lands in, worked out the way
+                the dashboard will place it. New adds a group to that
+                tab; Delete, Up and Down act on the selected one, and Up
+                and Down change its place on its tab, its entities going
+                with it.
+
+  @{b}Name@{ub}        renames the selected group (press Return).
+
+  @{b}Tab@{ub}         which page the selected group is on, chosen from the
+                tabs on the left. Choosing another moves the group there,
+                and the list follows it.
+
+  @{b}In column@{ub}   pins the selected group to a column, or leaves it to
+                ami2ha with Auto, which keeps the columns even. See
+                @{"Columns" link DASHBOARD}.
+
+@{b}Entities@{ub}
+
+  @{b}Group@{ub}       which group you are filling -- the same one that is
+                selected on the Layout page.
 
   @{b}Available HA entities@{ub}  everything the server offers that is not
                 on the dashboard yet.
@@ -683,16 +754,12 @@ command REFRESH does the same.
                 above, and add it there. It keeps its label and its
                 settings on the way.
 
-  @{b}In column@{ub}   which column the group on show sits in. Auto lets
-                ami2ha choose, which keeps the columns even. See
-                @{"Columns" link DASHBOARD}.
-
-  @{b}Columns@{ub}     how many columns the dashboard has. One is a single
-                tall column. Both take effect when you press Use or Save.
-
   @{b}Properties@{ub}   the selected entity's label and how it is shown,
                 the range for a gauge, and for a @{link "camera" CAMERAS}
                 its size, refresh interval and whether the time is shown.
+                Shorten a long label here: the longest one on any tab
+                sets how narrow the window can get (see
+                @{"Keep labels short" link DASHBOARD}).
                 Settings that do not apply to the selected entity are
                 greyed rather than hidden, so you can see what exists.
                 Changes are kept when you move to another entity; you do

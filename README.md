@@ -274,11 +274,18 @@ group "Kameras" column 1
 end
 ```
 
+For things looked at less often, put groups on tabs. `tab "Haus"` and
+`tab "Extras"` lines list the pages in order, and `group "Wasser" tab
+"Extras"` puts a group on one; groups that name no tab are on the first page.
+With no tab lines that page is called **Main**, and a dashboard with only one
+page has no tab bar at all. Each page gets its own columns.
+
 You do not have to edit the file, though: **Project → Settings…** opens a
-window where you pick which of the available entities appear, put them in
+window — a *Layout* page for tabs, groups and columns, an *Entities* page for
+what each group shows — where you pick which of the available entities appear, put them in
 groups, name the groups, order them, and set how each is shown -- the range
 for a gauge, a camera's size and refresh interval, how many columns the
-dashboard has (`columns`) and which column each group goes in. Save writes
+dashboard has (`columns`), and which tab and column each group goes in. Save writes
 the file back, Use applies the change without writing it.
 
 Note that MUI's cycle gadgets open a popup menu: press and hold, then
@@ -356,6 +363,11 @@ other format to ask for. Nothing else in ami2ha needs one.
 Everything carrying that label appears on the Amiga, named by its friendly
 name, with the widget kind inferred from its domain. Add a label in the HA
 UI and it turns up on the next start -- no file to edit on the Amiga.
+
+Friendly names can be long ("Shellypstripg4 98a31679fb0c output 3 power"),
+and the longest one on any page sets how narrow the window can get, hidden
+tabs included. Give those a short `label`, in the file or under Properties
+in the settings window.
 
 This asks Home Assistant to do the filtering with a rendered template. The
 obvious alternative, reading the entity registry, measured **2.4 MB** on a

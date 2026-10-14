@@ -1237,6 +1237,37 @@ static void test_move_group_survives_a_write(void)
     cfg_free(&cfg);
 }
 
+static void check_group_tabs(const a2h_config *cfg, const char *want);
+
+static void test_move_group_in_tab(void)
+{
+    a2h_config cfg;
+    char       err[CFG_ERR_MAX];
+
+    CHECK(parse(&cfg,
+        "tab \"Haus\"\ntab \"Extras\"\n"
+        "group \"A\"\n    sensor sensor.a\nend\n"
+        "group \"X\" tab \"Extras\"\n    sensor sensor.x\nend\n"
+        "group \"Y\" tab \"Extras\"\n    sensor sensor.y\nend\n"
+        "group \"B\"\n    sensor sensor.b\nend\n", err, sizeof err));
+
+    /* Up past X and Y to A's place; A follows it, X and Y keep order. */
+    CHECK_INT(cfg_move_group_in_tab(&cfg, 3, -1), 0);
+    check_order(&cfg, "B,A,X,Y", "sensor.b,sensor.a,sensor.x,sensor.y");
+    check_group_tabs(&cfg, ",,Extras,Extras");
+
+    /* Neighbours on the same tab: a plain swap. */
+    CHECK_INT(cfg_move_group_in_tab(&cfg, 2, 1), 3);
+    check_order(&cfg, "B,A,Y,X", "sensor.b,sensor.a,sensor.y,sensor.x");
+
+    /* First and last on their tab, though not in the file. */
+    CHECK_INT(cfg_move_group_in_tab(&cfg, 1, 1), -1);
+    CHECK_INT(cfg_move_group_in_tab(&cfg, 2, -1), -1);
+    CHECK_INT(cfg_move_group_in_tab(&cfg, 0, -1), -1);
+    check_order(&cfg, "B,A,Y,X", "sensor.b,sensor.a,sensor.y,sensor.x");
+    cfg_free(&cfg);
+}
+
 static void test_savesize(void)
 {
     a2h_config cfg, back;
@@ -1322,6 +1353,158 @@ static void test_arrange_discovered(void)
     cfg_free(&cfg);
 }
 
+static void test_tabs(void)
+{
+    a2h_config  cfg, back;
+    char        err[CFG_ERR_MAX];
+    int         tab_of[CFG_MAX_GROUPS], col[CFG_MAX_GROUPS];
+    const char *titles[CFG_MAX_GROUPS];
+    a2h_buf     out;
+
+    /* No group names a tab: one page, no bar. */
+    CHECK(parse(&cfg,
+        "group \"A\"\n    sensor sensor.a\nend\n"
+        "group \"B\"\n    sensor sensor.b\nend\n", err, sizeof err));
+    CHECK_INT(cfg_tabs(&cfg, tab_of, titles, CFG_MAX_GROUPS), 1);
+    CHECK_STR(titles[0], "Main");
+    cfg_free(&cfg);
+
+    /* Main first, whatever the file order; then the rest as they come. */
+    CHECK(parse(&cfg,
+        "columns 2\n"
+        "group \"Kameras\" tab \"Draussen\"\n    camera camera.a\nend\n"
+        "group \"Umwelt\"\n    sensor sensor.a\nend\n"
+        "group \"Wasser\" tab \"Draussen\" column 2\n"
+        "    sensor sensor.w\nend\n"
+        "group \"Energie\"\n    sensor sensor.e\nend\n", err, sizeof err));
+    CHECK_INT(cfg_tabs(&cfg, tab_of, titles, CFG_MAX_GROUPS), 2);
+    CHECK_STR(titles[0], "Main");
+    CHECK_STR(titles[1], "Draussen");
+    CHECK_INT(tab_of[0], 1);
+    CHECK_INT(tab_of[1], 0);
+    CHECK_INT(tab_of[2], 1);
+    CHECK_INT(tab_of[3], 0);
+    CHECK_STR(cfg.groups[2].tab, "Draussen");
+    CHECK_INT(cfg.groups[2].column, 2);
+
+    /* Each page fills its own columns: Umwelt starts Main's first column
+     * even though the camera made Draussen's first column tall. */
+    cfg_place_groups(&cfg, col);
+    CHECK_INT(col[0], 0);
+    CHECK_INT(col[2], 1);
+    CHECK_INT(col[1], 0);
+    CHECK_INT(col[3], 1);
+
+    /* Written back, the tabs come with it. */
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(strstr(buf_cstr(&out), "group \"Wasser\" column 2 tab \"Draussen\"")
+          != NULL);
+    CHECK(parse(&back, buf_cstr(&out), err, sizeof err));
+    CHECK_STR(back.groups[0].tab, "Draussen");
+    CHECK_STR(back.groups[1].tab, "");
+    buf_free(&out);
+    cfg_free(&back);
+    cfg_free(&cfg);
+
+    /* A tab with no name is a mistake worth naming. */
+    CHECK(!parse(&cfg, "group \"A\" tab\nend\n", err, sizeof err));
+    CHECK(strstr(err, "tab") != NULL);
+    cfg_free(&cfg);
+}
+
+/* Each group's tab name, comma separated ("" for the first page). */
+static void check_group_tabs(const a2h_config *cfg, const char *want)
+{
+    char got[256];
+    int  g, o = 0;
+
+    got[0] = '\0';
+    for (g = 0; g < cfg->ngroups; g++)
+        o += sprintf(got + o, "%s%s", g ? "," : "", cfg->groups[g].tab);
+    CHECK_STR(got, want);
+}
+
+static void test_tab_list(void)
+{
+    a2h_config  cfg, back;
+    char        err[CFG_ERR_MAX];
+    int         tab_of[CFG_MAX_GROUPS];
+    const char *titles[CFG_MAX_GROUPS];
+    a2h_buf     out;
+
+    /* Declared tabs, in the file's order; the first holds the untabbed,
+     * and naming it outright is the same as naming none. */
+    CHECK(parse(&cfg,
+        "tab \"Haus\"\ntab \"Extras\"\ntab \"Leer\"\n"
+        "group \"A\"\n    sensor sensor.a\nend\n"
+        "group \"B\" tab \"Extras\"\n    sensor sensor.b\nend\n"
+        "group \"C\" tab \"Haus\"\n    sensor sensor.c\nend\n",
+        err, sizeof err));
+    CHECK_INT(cfg.ntabs, 3);
+    CHECK_INT(cfg_tabs(&cfg, tab_of, titles, CFG_MAX_GROUPS), 3);
+    CHECK_STR(titles[0], "Haus");
+    CHECK_STR(titles[2], "Leer");     /* an empty tab is still a tab */
+    check_group_tabs(&cfg, ",Extras,");
+
+    /* Written back: the tab lines, and only the groups off the first page
+     * name one. */
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(strstr(buf_cstr(&out), "tab        \"Haus\"") != NULL);
+    CHECK(strstr(buf_cstr(&out), "group \"C\" tab") == NULL);
+    CHECK(parse(&back, buf_cstr(&out), err, sizeof err));
+    CHECK_INT(back.ntabs, 3);
+    check_group_tabs(&back, ",Extras,");
+    buf_free(&out);
+    cfg_free(&back);
+
+    /* Rename carries the groups along, first page included. */
+    CHECK(cfg_tab_rename(&cfg, 1, "Mehr"));
+    check_group_tabs(&cfg, ",Mehr,");
+    CHECK(cfg_tab_rename(&cfg, 0, "Uebersicht"));
+    CHECK_STR(cfg.tabs[0], "Uebersicht");
+    check_group_tabs(&cfg, ",Mehr,");
+    CHECK(!cfg_tab_rename(&cfg, 0, "Mehr"));      /* taken */
+    CHECK(!cfg_tab_rename(&cfg, 0, ""));
+
+    /* Moving a tab first makes it the home of the untabbed: A and C
+     * stay put, so now they name their page, and B names none. */
+    CHECK(cfg_tab_move(&cfg, 1, -1));
+    CHECK_STR(cfg.tabs[0], "Mehr");
+    check_group_tabs(&cfg, "Uebersicht,,Uebersicht");
+    CHECK(!cfg_tab_move(&cfg, 0, -1));
+
+    /* Deleting a tab sends its groups to the first page. */
+    CHECK(cfg_tab_delete(&cfg, 1));               /* Uebersicht */
+    CHECK_INT(cfg.ntabs, 2);
+    check_group_tabs(&cfg, ",,");
+    CHECK(cfg_tab_delete(&cfg, 1));               /* Leer */
+    CHECK(!cfg_tab_delete(&cfg, 0));              /* the last one stays */
+
+    /* Adding, and putting a group on it. */
+    CHECK_INT(cfg_tab_add(&cfg, "Garten"), 1);
+    CHECK_INT(cfg_tab_add(&cfg, "Garten"), -1);
+    cfg_group_set_tab(&cfg, 2, 1);
+    check_group_tabs(&cfg, ",,Garten");
+    cfg_group_set_tab(&cfg, 2, 0);
+    check_group_tabs(&cfg, ",,");
+    cfg_free(&cfg);
+
+    /* A configuration without tabs gets Main the moment one is added,
+     * and writes nothing while Main is all there is. */
+    CHECK(parse(&cfg, "group \"A\"\n    sensor sensor.a\nend\n",
+                err, sizeof err));
+    CHECK_INT(cfg.ntabs, 0);
+    buf_init(&out);
+    CHECK(cfg_write(&cfg, &out));
+    CHECK(strstr(buf_cstr(&out), "tab") == NULL);
+    buf_free(&out);
+    CHECK_INT(cfg_tab_add(&cfg, "Extras"), 1);
+    CHECK_STR(cfg.tabs[0], "Main");
+    cfg_free(&cfg);
+}
+
 void suite_config(void)
 {
     RUN(test_globals);
@@ -1371,6 +1554,9 @@ void suite_config(void)
     RUN(test_place_groups_empty_group_takes_no_room);
     RUN(test_move_group);
     RUN(test_move_group_survives_a_write);
+    RUN(test_move_group_in_tab);
     RUN(test_savesize);
     RUN(test_arrange_discovered);
+    RUN(test_tabs);
+    RUN(test_tab_list);
 }

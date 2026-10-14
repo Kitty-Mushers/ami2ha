@@ -327,6 +327,13 @@ struct a2h_ui {
     int         full_active;
     int         full_pending;
     int         scrolled;        /* the dashboard sits in a Scrollgroup */
+
+    /* Tabs, when more than one page: the register, its titles (it keeps
+     * the pointers), and which page was open, kept across a rebuild. */
+    Object     *pages;
+    const char *tab_titles[CFG_MAX_GROUPS + 1];
+    char        tab_names[CFG_MAX_GROUPS][CFG_TITLE_MAX];
+    int         active_tab;
     char        save_size[20];   /* "1280x720" or "full size", for messages */
     char        save_title[40];  /* the menu item: "Save at 1280x720"       */
     char        full_dest[CFG_PATH_MAX + 64];
@@ -1029,30 +1036,20 @@ static void bind_controls(a2h_ui *ui)
  * Here a column is only as tall as what is in it, and a spacer at the
  * bottom takes up whatever the tallest column leaves over.
  */
-static void build_groups(a2h_ui *ui)
+/*
+ * One page of the dashboard: the groups on tab `tab`, in their columns.
+ * Always returns a row, if an empty one -- a register needs a page for
+ * every title it shows -- or NULL when out of memory.
+ */
+static Object *build_page(a2h_ui *ui, int tab, const int *tab_of,
+                          const int *col_of, int ncols)
 {
     Object *row, *col[CFG_MAX_COLUMNS];
-    int     col_of[CFG_MAX_GROUPS];
-    int     ncols = ui->cfg->columns, g, c, i;
-
-    if (ncols < 1)               ncols = 1;
-    if (ncols > CFG_MAX_COLUMNS) ncols = CFG_MAX_COLUMNS;
-
-    cfg_place_groups(ui->cfg, col_of);
-
-    /* Every camera's menu names the size it saves at; built here so a
-     * rebuild after the settings change picks up a new one. */
-    if (ui->cfg->save_w > 0 && ui->cfg->save_h > 0)
-        snprintf(ui->save_size, sizeof ui->save_size, "%dx%d",
-                 ui->cfg->save_w, ui->cfg->save_h);
-    else
-        strcpy(ui->save_size, "full size");
-    snprintf(ui->save_title, sizeof ui->save_title, "Save at %s",
-             ui->save_size);
+    int     g, c, i;
 
     row = MUI_NewObject(MUIC_Group, MUIA_Group_Horiz, TRUE, TAG_DONE);
     if (!row)
-        return;
+        return NULL;
     for (c = 0; c < ncols; c++)
         col[c] = NULL;     /* made on first use: an empty column is a
                               stripe of nothing, so it is never made */
@@ -1060,6 +1057,9 @@ static void build_groups(a2h_ui *ui)
     for (g = 0; g < ui->cfg->ngroups; g++) {
         const a2h_group *grp = &ui->cfg->groups[g];
         Object          *box;
+
+        if (tab_of[g] != tab)
+            continue;
 
         /* A group with nothing in it would draw as a small empty framed
          * box. The settings window can leave those behind, so skip them. */
@@ -1108,8 +1108,75 @@ static void build_groups(a2h_ui *ui)
             DoMethod(col[c], OM_ADDMEMBER, (IPTR)fill);
         DoMethod(row, OM_ADDMEMBER, (IPTR)col[c]);
     }
+    return row;
+}
 
-    DoMethod(ui->root, OM_ADDMEMBER, (IPTR)row);
+static void build_groups(a2h_ui *ui)
+{
+    int         col_of[CFG_MAX_GROUPS], tab_of[CFG_MAX_GROUPS];
+    const char *titles[CFG_MAX_GROUPS];
+    int         ncols = ui->cfg->columns, ntabs, t;
+
+    if (ncols < 1)               ncols = 1;
+    if (ncols > CFG_MAX_COLUMNS) ncols = CFG_MAX_COLUMNS;
+
+    cfg_place_groups(ui->cfg, col_of);
+    ntabs = cfg_tabs(ui->cfg, tab_of, titles, CFG_MAX_GROUPS);
+
+    /* Every camera's menu names the size it saves at; built here so a
+     * rebuild after the settings change picks up a new one. */
+    if (ui->cfg->save_w > 0 && ui->cfg->save_h > 0)
+        snprintf(ui->save_size, sizeof ui->save_size, "%dx%d",
+                 ui->cfg->save_w, ui->cfg->save_h);
+    else
+        strcpy(ui->save_size, "full size");
+    snprintf(ui->save_title, sizeof ui->save_title, "Save at %s",
+             ui->save_size);
+
+    ui->pages = NULL;
+
+    /* One page is the dashboard as it always was: no tab bar. */
+    if (ntabs <= 1) {
+        Object *row = build_page(ui, 0, tab_of, col_of, ncols);
+        if (row)
+            DoMethod(ui->root, OM_ADDMEMBER, (IPTR)row);
+        return;
+    }
+
+    /*
+     * Several: a register, one page per tab. Its titles are fixed when it
+     * is made -- MUIA_Register_Titles is init-only -- so the names are
+     * copied somewhere that lives as long as it does, and a change of tabs
+     * in the settings window means a new register, which a rebuild makes
+     * anyway.
+     */
+    for (t = 0; t < ntabs; t++) {
+        snprintf(ui->tab_names[t], sizeof ui->tab_names[t], "%s", titles[t]);
+        ui->tab_titles[t] = ui->tab_names[t];
+    }
+    ui->tab_titles[ntabs] = NULL;
+
+    ui->pages = MUI_NewObject(MUIC_Register,
+        MUIA_Register_Titles, (IPTR)ui->tab_titles,
+        TAG_DONE);
+    if (!ui->pages)
+        return;
+
+    for (t = 0; t < ntabs; t++) {
+        Object *row = build_page(ui, t, tab_of, col_of, ncols);
+        if (!row)
+            row = MUI_NewObject(MUIC_Rectangle, TAG_DONE);
+        if (row)
+            DoMethod(ui->pages, OM_ADDMEMBER, (IPTR)row);
+    }
+
+    /* The page that was open stays open across a rebuild -- as far as
+     * there still is one. */
+    if (ui->active_tab >= ntabs)
+        ui->active_tab = ntabs - 1;
+    set(ui->pages, MUIA_Group_ActivePage, (IPTR)ui->active_tab);
+
+    DoMethod(ui->root, OM_ADDMEMBER, (IPTR)ui->pages);
 }
 
 /*
@@ -1219,6 +1286,13 @@ void ui_rebuild(a2h_ui *ui)
      * nothing here: the columns are children built fresh below, so the
      * root itself never has to change shape.
      */
+    /* Remember the open page before the register goes. */
+    if (ui->pages) {
+        LONG page = 0;
+        get(ui->pages, MUIA_Group_ActivePage, &page);
+        ui->active_tab = (int)page;
+    }
+
     DoMethod(ui->root, MUIM_Group_InitChange);
 
     children = NULL;

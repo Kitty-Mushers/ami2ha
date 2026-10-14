@@ -36,7 +36,15 @@ typedef struct a2h_editor a2h_editor;
 #define ID_ED_GROUP_UP  (ID_ED_BASE + 17)
 #define ID_ED_GROUP_DN  (ID_ED_BASE + 18)
 #define ID_ED_COLUMNS   (ID_ED_BASE + 19)
-#define ID_ED_LAST      (ID_ED_BASE + 19)
+#define ID_ED_GROUP_TAB (ID_ED_BASE + 20)
+#define ID_ED_GLIST     (ID_ED_BASE + 21)
+#define ID_ED_TAB_SEL   (ID_ED_BASE + 22)
+#define ID_ED_TAB_RENAME (ID_ED_BASE + 23)
+#define ID_ED_TAB_NEW   (ID_ED_BASE + 24)
+#define ID_ED_TAB_DEL   (ID_ED_BASE + 25)
+#define ID_ED_TAB_UP    (ID_ED_BASE + 26)
+#define ID_ED_TAB_DN    (ID_ED_BASE + 27)
+#define ID_ED_LAST      (ID_ED_BASE + 27)
 
 /*
  * `cfg` is edited in place when the user applies; a copy is kept so Cancel

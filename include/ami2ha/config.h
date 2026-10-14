@@ -29,6 +29,13 @@
  *       camera camera.einfahrt  label "Einfahrt" width 320 height 180
  *   end
  *
+ *   tab "Haus"                  # the pages, in order; the first one
+ *   tab "Extras"                # holds every group that names none
+ *
+ *   group "Wasser" tab "Extras" # on a page of its own
+ *       ...
+ *   end
+ *
  *   group "Szenen"
  *       button scene.gute_nacht  label "Gute Nacht"
  *       button light.turn_on     label "Hell"  entity light.kueche \
@@ -55,6 +62,8 @@
 /* Bounds exist to keep a mistyped or hostile file from exhausting memory. */
 #define CFG_MAX_GROUPS   32
 #define CFG_MAX_COLUMNS  8
+#define CFG_TAB_MAIN     "Main" /* the first page, until someone renames it */
+#define CFG_MAX_TABS     16
 #define CFG_SAVE_W       1280   /* savesize when the file says nothing */
 #define CFG_SAVE_H       720
 #define CFG_MAX_WIDGETS  128
@@ -130,6 +139,12 @@ typedef struct {
      * does not lose the arrangement -- placement clamps it instead.
      */
     int  column;
+    /*
+     * The page it is on, by name; empty is the first page, whatever that
+     * is called. A name rather than an index so that reordering the tabs
+     * leaves every group where it was.
+     */
+    char tab[CFG_TITLE_MAX];
 } a2h_group;
 
 typedef struct {
@@ -180,6 +195,15 @@ typedef struct {
 
     int  columns;      /* dashboard columns; 0 = let MUI decide */
     int  refresh_secs; /* application-level ping interval       */
+
+    /*
+     * The pages, in the order the tab bar shows them. The first is where
+     * every group that names no tab lives, so renaming it renames that
+     * page. Empty, the dashboard is one page called CFG_TAB_MAIN with no
+     * tab bar -- which is every configuration written before tabs.
+     */
+    char tabs[CFG_MAX_TABS][CFG_TITLE_MAX];
+    int  ntabs;
 
     a2h_group   groups[CFG_MAX_GROUPS];
     int         ngroups;
@@ -260,12 +284,47 @@ void cfg_arrange_discovered(a2h_config *cfg);
 void cfg_place_groups(const a2h_config *cfg, int *col_of);
 
 /*
+ * Work out the dashboard's pages. Writes each group's page index into
+ * `tab_of` (cfg->ngroups entries) and the page titles into `titles`, at
+ * most `max` of them; returns how many pages there are -- at least one,
+ * CFG_TAB_MAIN, when no tabs are configured. One page is shown without a
+ * tab bar at all.
+ */
+int cfg_tabs(const a2h_config *cfg, int *tab_of, const char **titles, int max);
+
+/*
+ * Editing the tabs. Each keeps the groups on the pages they were on: a
+ * rename carries the groups along, deleting a tab moves its groups to the
+ * first page, and moving a tab into first place makes it the page that
+ * groups naming no tab belong to -- without moving any of them.
+ *
+ * All return 1 on success and 0 when the request makes no sense: an empty
+ * or duplicate name, no room, an index off the end, or deleting the last
+ * tab. cfg_tab_add returns the new tab's index, or -1.
+ */
+int cfg_tab_add(a2h_config *cfg, const char *name);
+int cfg_tab_rename(a2h_config *cfg, int t, const char *name);
+int cfg_tab_delete(a2h_config *cfg, int t);
+int cfg_tab_move(a2h_config *cfg, int t, int delta);
+
+/* Put group `g` on page `t` (0 is the first page). */
+void cfg_group_set_tab(a2h_config *cfg, int g, int t);
+
+/*
  * Swap group `g` with its neighbour, one place earlier (`delta` -1) or
  * later (+1), taking its widgets along. Earlier means higher up in its
  * column and placed sooner, since placement goes in file order. Returns
  * the group's new index, or -1 when there is nowhere to go.
  */
 int cfg_move_group(a2h_config *cfg, int g, int delta);
+
+/*
+ * Move group `g` past the nearest group on the same tab, earlier (`delta`
+ * -1) or later (+1), stepping over any groups on other tabs between them.
+ * Their order among themselves is untouched. Returns the group's new
+ * index, or -1 when it is already first or last on its tab.
+ */
+int cfg_move_group_in_tab(a2h_config *cfg, int g, int delta);
 
 /* Human-readable name of a widget kind, for error messages and the editor. */
 const char *cfg_widget_kind_name(widget_kind k);

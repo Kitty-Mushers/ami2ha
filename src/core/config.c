@@ -134,50 +134,237 @@ int cfg_move_group(a2h_config *cfg, int g, int delta)
     return g + delta;
 }
 
+static void copy_str(char *dst, size_t dstsz, const char *src);
+
+static int tab_index(const a2h_config *cfg, const char *name)
+{
+    int t;
+
+    for (t = 0; t < cfg->ntabs; t++)
+        if (strcmp(cfg->tabs[t], name) == 0)
+            return t;
+    return -1;
+}
+
+int cfg_tabs(const a2h_config *cfg, int *tab_of, const char **titles, int max)
+{
+    int g, t, n;
+
+    if (max < 1)
+        return 0;
+
+    if (cfg->ntabs == 0) {
+        titles[0] = CFG_TAB_MAIN;
+        for (g = 0; g < cfg->ngroups; g++)
+            tab_of[g] = 0;
+        return 1;
+    }
+
+    n = cfg->ntabs < max ? cfg->ntabs : max;
+    for (t = 0; t < n; t++)
+        titles[t] = cfg->tabs[t];
+
+    /* A name that is not a tab any more cannot happen through the editing
+     * calls below; from a hand-edited file it means the first page. */
+    for (g = 0; g < cfg->ngroups; g++) {
+        t = cfg->groups[g].tab[0] ? tab_index(cfg, cfg->groups[g].tab) : 0;
+        tab_of[g] = (t >= 0 && t < n) ? t : 0;
+    }
+    return n;
+}
+
+/*
+ * Groups name their page, except on the first page, where they name none.
+ * Edits that touch the first page are easiest done with every group
+ * naming its page outright, then folded back.
+ */
+static void tabs_name_all(a2h_config *cfg)
+{
+    int g;
+
+    for (g = 0; g < cfg->ngroups; g++)
+        if (!cfg->groups[g].tab[0] || tab_index(cfg, cfg->groups[g].tab) < 0)
+            copy_str(cfg->groups[g].tab, sizeof cfg->groups[g].tab,
+                     cfg->tabs[0]);
+}
+
+static void tabs_fold_first(a2h_config *cfg)
+{
+    int g;
+
+    for (g = 0; g < cfg->ngroups; g++)
+        if (strcmp(cfg->groups[g].tab, cfg->tabs[0]) == 0)
+            cfg->groups[g].tab[0] = '\0';
+}
+
+/* Before the first edit, a configuration without tabs has one: Main. */
+static void tabs_ensure(a2h_config *cfg)
+{
+    if (cfg->ntabs == 0) {
+        copy_str(cfg->tabs[0], sizeof cfg->tabs[0], CFG_TAB_MAIN);
+        cfg->ntabs = 1;
+    }
+}
+
+static int tab_name_ok(const a2h_config *cfg, const char *name)
+{
+    return name && name[0] && tab_index(cfg, name) < 0;
+}
+
+int cfg_tab_add(a2h_config *cfg, const char *name)
+{
+    tabs_ensure(cfg);
+    if (!tab_name_ok(cfg, name) || cfg->ntabs >= CFG_MAX_TABS)
+        return -1;
+    copy_str(cfg->tabs[cfg->ntabs], sizeof cfg->tabs[0], name);
+    return cfg->ntabs++;
+}
+
+int cfg_tab_rename(a2h_config *cfg, int t, const char *name)
+{
+    char old[CFG_TITLE_MAX];
+    int  g;
+
+    tabs_ensure(cfg);
+    if (t < 0 || t >= cfg->ntabs || !tab_name_ok(cfg, name))
+        return 0;
+
+    copy_str(old, sizeof old, cfg->tabs[t]);
+    copy_str(cfg->tabs[t], sizeof cfg->tabs[t], name);
+    for (g = 0; g < cfg->ngroups; g++)
+        if (strcmp(cfg->groups[g].tab, old) == 0)
+            copy_str(cfg->groups[g].tab, sizeof cfg->groups[g].tab, name);
+    return 1;
+}
+
+int cfg_tab_delete(a2h_config *cfg, int t)
+{
+    char gone[CFG_TITLE_MAX];
+    int  g, i;
+
+    if (t < 0 || t >= cfg->ntabs || cfg->ntabs < 2)
+        return 0;
+
+    tabs_name_all(cfg);
+    copy_str(gone, sizeof gone, cfg->tabs[t]);
+    for (i = t; i < cfg->ntabs - 1; i++)
+        copy_str(cfg->tabs[i], sizeof cfg->tabs[i], cfg->tabs[i + 1]);
+    cfg->ntabs--;
+
+    /* Its groups go to whichever page is first now. */
+    for (g = 0; g < cfg->ngroups; g++)
+        if (strcmp(cfg->groups[g].tab, gone) == 0)
+            copy_str(cfg->groups[g].tab, sizeof cfg->groups[g].tab,
+                     cfg->tabs[0]);
+    tabs_fold_first(cfg);
+    return 1;
+}
+
+int cfg_tab_move(a2h_config *cfg, int t, int delta)
+{
+    char tmp[CFG_TITLE_MAX];
+    int  to = t + delta;
+
+    if ((delta != -1 && delta != 1) || t < 0 || t >= cfg->ntabs ||
+        to < 0 || to >= cfg->ntabs)
+        return 0;
+
+    tabs_name_all(cfg);
+    copy_str(tmp, sizeof tmp, cfg->tabs[t]);
+    copy_str(cfg->tabs[t], sizeof cfg->tabs[t], cfg->tabs[to]);
+    copy_str(cfg->tabs[to], sizeof cfg->tabs[to], tmp);
+    tabs_fold_first(cfg);
+    return 1;
+}
+
+void cfg_group_set_tab(a2h_config *cfg, int g, int t)
+{
+    if (g < 0 || g >= cfg->ngroups)
+        return;
+    tabs_ensure(cfg);
+    if (t <= 0 || t >= cfg->ntabs)
+        cfg->groups[g].tab[0] = '\0';
+    else
+        copy_str(cfg->groups[g].tab, sizeof cfg->groups[g].tab,
+                 cfg->tabs[t]);
+}
+
+int cfg_move_group_in_tab(a2h_config *cfg, int g, int delta)
+{
+    int         tab_of[CFG_MAX_GROUPS];
+    const char *titles[CFG_MAX_GROUPS];
+    int         to;
+
+    if ((delta != -1 && delta != 1) || g < 0 || g >= cfg->ngroups)
+        return -1;
+    cfg_tabs(cfg, tab_of, titles, CFG_MAX_GROUPS);
+    for (to = g + delta; to >= 0 && to < cfg->ngroups; to += delta)
+        if (tab_of[to] == tab_of[g])
+            break;
+    if (to < 0 || to >= cfg->ngroups)
+        return -1;
+
+    /* One swap at a time until it holds the other group's old place: the
+     * groups stepped over each shift by one, in the order they had. */
+    while (g != to)
+        g = cfg_move_group(cfg, g, delta);
+    return g;
+}
+
 void cfg_place_groups(const a2h_config *cfg, int *col_of)
 {
-    long height[CFG_MAX_COLUMNS];
-    int  ncols = cfg->columns, g, c, i, pass;
+    long        height[CFG_MAX_COLUMNS];
+    int         tab_of[CFG_MAX_GROUPS];
+    const char *titles[CFG_MAX_GROUPS];
+    int         ncols = cfg->columns, ntabs, t, g, c, i, pass;
 
     if (ncols < 1)               ncols = 1;
     if (ncols > CFG_MAX_COLUMNS) ncols = CFG_MAX_COLUMNS;
 
-    for (c = 0; c < ncols; c++)
-        height[c] = 0;
+    /* Each page has columns of its own, filled as if it were the only
+     * one: what is on another page takes no room here. */
+    ntabs = cfg_tabs(cfg, tab_of, titles, CFG_MAX_GROUPS);
 
-    /* Pinned groups first, then the rest into whatever room is left. */
-    for (pass = 0; pass < 2; pass++) {
-        for (g = 0; g < cfg->ngroups; g++) {
-            const a2h_group *grp    = &cfg->groups[g];
-            int              pinned = grp->column > 0;
-            long             rows   = 0;
+    for (t = 0; t < ntabs; t++) {
+        for (c = 0; c < ncols; c++)
+            height[c] = 0;
 
-            if (pinned != (pass == 0))
-                continue;
+        /* Pinned groups first, then the rest into whatever room is left. */
+        for (pass = 0; pass < 2; pass++) {
+            for (g = 0; g < cfg->ngroups; g++) {
+                const a2h_group *grp    = &cfg->groups[g];
+                int              pinned = grp->column > 0;
+                long             rows   = 0;
 
-            if (pinned) {
-                c = grp->column - 1;
-                if (c >= ncols)
-                    c = ncols - 1;
-            } else {
-                c = 0;
-                for (i = 1; i < ncols; i++)
-                    if (height[i] < height[c])
-                        c = i;
+                if (tab_of[g] != t)
+                    continue;
+                if (pinned != (pass == 0))
+                    continue;
+
+                if (pinned) {
+                    c = grp->column - 1;
+                    if (c >= ncols)
+                        c = ncols - 1;
+                } else {
+                    c = 0;
+                    for (i = 1; i < ncols; i++)
+                        if (height[i] < height[c])
+                            c = i;
+                }
+
+                /* An empty group is skipped when the dashboard is built, so
+                 * it must not take up room here either. */
+                if (grp->nwidgets > 0) {
+                    rows = 2;   /* the frame and its title */
+                    for (i = grp->first_widget;
+                         i < grp->first_widget + grp->nwidgets &&
+                         i < cfg->nwidgets; i++)
+                        rows += widget_rows(&cfg->widgets[i]);
+                }
+
+                col_of[g]  = c;
+                height[c] += rows;
             }
-
-            /* An empty group is skipped when the dashboard is built, so
-             * it must not take up room here either. */
-            if (grp->nwidgets > 0) {
-                rows = 2;   /* the frame and its title */
-                for (i = grp->first_widget;
-                     i < grp->first_widget + grp->nwidgets &&
-                     i < cfg->nwidgets; i++)
-                    rows += widget_rows(&cfg->widgets[i]);
-            }
-
-            col_of[g]  = c;
-            height[c] += rows;
         }
     }
 }
@@ -604,10 +791,18 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
             cfg->ngroups++;
             in_group = 1;
 
-            /* Options after the title. Only one so far. */
+            /* Options after the title. */
             while (!s.failed && next_token(&s, tok, sizeof tok)) {
                 long v;
 
+                if (strcmp(tok, "tab") == 0) {
+                    if (!next_token(&s, tok, sizeof tok) || !tok[0]) {
+                        cfg_fail(&s, "expected a name after", "tab");
+                        break;
+                    }
+                    copy_text(g->tab, sizeof g->tab, tok);
+                    continue;
+                }
                 if (strcmp(tok, "column") != 0) {
                     cfg_fail(&s, "unknown group option", tok);
                     break;
@@ -641,6 +836,23 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
                     copy_str(cfg->savedir, sizeof cfg->savedir, tok);
                 else
                     cfg_fail(&s, "expected a directory after", "savedir");
+            } else if (strcmp(tok, "tab") == 0) {
+                char name[CFG_TITLE_MAX];
+
+                if (!next_token(&s, tok, sizeof tok) || !tok[0]) {
+                    cfg_fail(&s, "expected a name after", "tab");
+                    break;
+                }
+                copy_text(name, sizeof name, tok);
+                /* A repeat is harmless; it is the same page. */
+                if (tab_index(cfg, name) < 0) {
+                    if (cfg->ntabs >= CFG_MAX_TABS) {
+                        cfg_fail(&s, "too many tabs at", name);
+                        break;
+                    }
+                    copy_str(cfg->tabs[cfg->ntabs++], sizeof cfg->tabs[0],
+                             name);
+                }
             } else if (strcmp(tok, "savesize") == 0) {
                 long w, h;
                 int  have = next_token(&s, tok, sizeof tok);
@@ -715,6 +927,28 @@ int cfg_parse(a2h_config *cfg, const char *text, size_t len,
 
     if (cfg->columns < 1) cfg->columns = 1;
     if (cfg->columns > CFG_MAX_COLUMNS) cfg->columns = CFG_MAX_COLUMNS;
+
+    /*
+     * A group may name a tab the file never declared -- typed by hand, or
+     * written before tabs were declared at all. It becomes a page at the
+     * end, after Main if nothing else is first. A group naming the first
+     * page outright is the same as naming none.
+     */
+    {
+        int g;
+
+        for (g = 0; g < cfg->ngroups; g++) {
+            const char *t = cfg->groups[g].tab;
+
+            if (!t[0] || tab_index(cfg, t) >= 0)
+                continue;
+            tabs_ensure(cfg);
+            if (cfg->ntabs < CFG_MAX_TABS)
+                copy_str(cfg->tabs[cfg->ntabs++], sizeof cfg->tabs[0], t);
+        }
+        if (cfg->ntabs > 0)
+            tabs_fold_first(cfg);
+    }
 
     if (err && errsz)
         err[0] = '\0';
@@ -1101,6 +1335,19 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
     if (cfg->refresh_secs != 60)
         buf_printf(out, "refresh    %d\n", cfg->refresh_secs);
 
+    /* The tabs, unless they are only the unnamed default. */
+    if (cfg->ntabs > 1 ||
+        (cfg->ntabs == 1 && strcmp(cfg->tabs[0], CFG_TAB_MAIN) != 0)) {
+        int t;
+
+        buf_append_byte(out, '\n');
+        for (t = 0; t < cfg->ntabs; t++) {
+            buf_append_str(out, "tab        ");
+            write_quoted(out, cfg->tabs[t]);
+            buf_append_byte(out, '\n');
+        }
+    }
+
     for (g = 0; g < cfg->ngroups; g++) {
         const a2h_group *grp = &cfg->groups[g];
 
@@ -1108,6 +1355,10 @@ int cfg_write(const a2h_config *cfg, a2h_buf *out)
         write_quoted(out, grp->title);
         if (grp->column > 0)
             buf_printf(out, " column %d", grp->column);
+        if (grp->tab[0]) {
+            buf_append_str(out, " tab ");
+            write_quoted(out, grp->tab);
+        }
         buf_append_byte(out, '\n');
 
         for (i = grp->first_widget;

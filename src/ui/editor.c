@@ -41,6 +41,16 @@ struct a2h_editor {
     Object *str_refresh, *str_camw, *str_camh, *cm_stamp;
     Object *cyc_columns;
     Object *cyc_gcolumn;  /* which column the group on show sits in */
+    Object *cyc_gtab;     /* which tab it is on                       */
+
+    /* The Layout page: the tabs, and every group in one list. */
+    Object *lv_tabs, *list_tabs, *str_tabname;
+    Object *bt_tnew, *bt_tdel, *bt_tup, *bt_tdown;
+    Object *lv_groups, *list_groups;
+    int     tab;          /* which tab the Tabs list has selected     */
+    int     glist_map[CFG_MAX_GROUPS];  /* list row -> group index    */
+    int     nglist;       /* rows in the list: the groups on that tab */
+    const char *tab_titles[CFG_MAX_TABS + 1];  /* for cyc_gtab        */
     Object *bt_save, *bt_use, *bt_cancel;
 
     a2h_config *cfg;      /* the live configuration, edited on apply */
@@ -298,6 +308,14 @@ static void show_group_name(a2h_editor *ed)
              MUIA_String_Contents,
              (IPTR)(have ? ed->cfg->groups[ed->group].title : ""),
              TAG_DONE);
+    if (ed->cyc_gtab && have) {
+        int tab_of[CFG_MAX_GROUPS];
+        const char *titles[CFG_MAX_TABS];
+
+        cfg_tabs(ed->cfg, tab_of, titles, CFG_MAX_TABS);
+        SetAttrs(ed->cyc_gtab, MUIA_NoNotify, TRUE,
+                 MUIA_Cycle_Active, (IPTR)tab_of[ed->group], TAG_DONE);
+    }
 
     /* Its column travels with it, for the same reason. A hand-written
      * file may pin a group beyond what the cycle offers; show the last
@@ -338,13 +356,119 @@ static void refresh_lists(a2h_editor *ed)
     show_properties(ed);
 }
 
-/* Room for "32. " + a title + " (column 8)". */
-#define GROUP_LABEL_MAX (CFG_TITLE_MAX + 20)
+/*
+ * Give a Cycle new entries and make it show `active`. Three steps, for
+ * the reason refresh_groups below spells out: new entries alone repaint
+ * the first of them while leaving the active index alone.
+ */
+static void cycle_reload(Object *cyc, const char **entries, int n, int active)
+{
+    LONG nudge = active ? 0 : (n > 1 ? 1 : 0);
+
+    SetAttrs(cyc, MUIA_NoNotify, TRUE,
+             MUIA_Cycle_Entries, (IPTR)entries, TAG_DONE);
+    SetAttrs(cyc, MUIA_NoNotify, TRUE,
+             MUIA_Cycle_Active, (IPTR)nudge, TAG_DONE);
+    SetAttrs(cyc, MUIA_NoNotify, TRUE,
+             MUIA_Cycle_Active, (IPTR)active, TAG_DONE);
+}
+
+/* Which tab group `g` is on, 0 for none or the first page. */
+static int group_tab(a2h_editor *ed, int g)
+{
+    int         tab_of[CFG_MAX_GROUPS];
+    const char *titles[CFG_MAX_TABS];
+
+    if (g < 0 || g >= ed->cfg->ngroups)
+        return 0;
+    cfg_tabs(ed->cfg, tab_of, titles, CFG_MAX_TABS);
+    return tab_of[g];
+}
+
+/*
+ * Make the group being edited one on the selected tab: the one already
+ * chosen if it is there, else the first the tab has. An empty tab leaves
+ * it alone, and the group gadgets go grey instead. Returns whether the
+ * group changed, so the caller can refresh the entity lists; apply()
+ * first, since this moves away from the group the lists belong to.
+ */
+static int pick_group_on_tab(a2h_editor *ed)
+{
+    int g;
+
+    if (ed->group >= 0 && ed->group < ed->cfg->ngroups &&
+        group_tab(ed, ed->group) == ed->tab)
+        return 0;
+    for (g = 0; g < ed->cfg->ngroups; g++)
+        if (group_tab(ed, g) == ed->tab) {
+            ed->group = g;
+            return 1;
+        }
+    return 0;
+}
+
+/*
+ * The Tabs list, its name field, and the Tab cycle every group chooses
+ * from. A configuration without tabs shows the one page it has, Main,
+ * which becomes a real tab the moment anything is done to it.
+ */
+static void refresh_tabs(a2h_editor *ed)
+{
+    int         tab_of[CFG_MAX_GROUPS];
+    const char *titles[CFG_MAX_TABS];
+    int         n, t;
+
+    n = cfg_tabs(ed->cfg, tab_of, titles, CFG_MAX_TABS);
+    for (t = 0; t < n; t++)
+        ed->tab_titles[t] = titles[t];
+    ed->tab_titles[n] = NULL;
+
+    if (ed->tab >= n) ed->tab = n - 1;
+    if (ed->tab < 0)  ed->tab = 0;
+
+    set(ed->list_tabs, MUIA_List_Quiet, TRUE);
+    DoMethod(ed->list_tabs, MUIM_List_Clear);
+    for (t = 0; t < n; t++)
+        DoMethod(ed->list_tabs, MUIM_List_InsertSingle, (IPTR)titles[t],
+                 MUIV_List_Insert_Bottom);
+    set(ed->list_tabs, MUIA_List_Quiet, FALSE);
+    SetAttrs(ed->list_tabs, MUIA_NoNotify, TRUE,
+             MUIA_List_Active, (IPTR)ed->tab, TAG_DONE);
+    SetAttrs(ed->str_tabname, MUIA_NoNotify, TRUE,
+             MUIA_String_Contents, (IPTR)titles[ed->tab], TAG_DONE);
+
+    /* The last tab cannot go: there has to be a page. */
+    set(ed->bt_tdel, MUIA_Disabled, n < 2);
+
+    cycle_reload(ed->cyc_gtab, ed->tab_titles, n,
+                 (ed->group >= 0 && ed->group < ed->cfg->ngroups)
+                     ? tab_of[ed->group] : 0);
+}
+
+/* A name for a new tab that is not taken yet: "Tab 2", "Tab 3", ... */
+static void tab_new(a2h_editor *ed)
+{
+    char name[CFG_TITLE_MAX];
+    int  i, t = -1;
+
+    for (i = ed->cfg->ntabs + 1; i < 100 && t < 0; i++) {
+        sprintf(name, "Tab %d", i < 2 ? 2 : i);
+        t = cfg_tab_add(ed->cfg, name);
+    }
+    if (t < 0)
+        return;               /* full: CFG_MAX_TABS */
+    ed->tab = t;
+}
+
+/* Room for "32. " + a title + " (" + a tab + ", column 8)". */
+#define GROUP_LABEL_MAX (2 * CFG_TITLE_MAX + 24)
 
 static void refresh_groups(a2h_editor *ed)
 {
-    int  i, ncols, saved;
-    int  col_of[CFG_MAX_GROUPS];
+    int  i, ncols, saved, ntabs, on_tab;
+    int  col_of[CFG_MAX_GROUPS], tab_of[CFG_MAX_GROUPS];
+    int  pos[CFG_MAX_GROUPS], seen[CFG_MAX_TABS];
+    const char *tabs[CFG_MAX_GROUPS];
     LONG cyc = 0;
 
     free(ed->group_titles);
@@ -368,6 +492,13 @@ static void refresh_groups(a2h_editor *ed)
     ncols = ed->cfg->columns;
     cfg_place_groups(ed->cfg, col_of);
     ed->cfg->columns = saved;
+    ntabs = cfg_tabs(ed->cfg, tab_of, tabs, CFG_MAX_GROUPS);
+
+    /* Numbered within their tab, which is the order that shows on it. */
+    for (i = 0; i < CFG_MAX_TABS; i++)
+        seen[i] = 0;
+    for (i = 0; i < ed->cfg->ngroups; i++)
+        pos[i] = ++seen[tab_of[i]];
 
     ed->group_labels = (char *)malloc((size_t)ed->cfg->ngroups *
                                       GROUP_LABEL_MAX + 1);
@@ -379,11 +510,19 @@ static void refresh_groups(a2h_editor *ed)
             continue;
         }
         l = ed->group_labels + (size_t)i * GROUP_LABEL_MAX;
-        if (ncols > 1)
-            sprintf(l, "%d. %s (column %d)", i + 1,
+        /* With tabs, the tab first: it is the coarser of the two, and a
+         * column number means nothing without knowing which page. */
+        if (ntabs > 1 && ncols > 1)
+            sprintf(l, "%d. %s (%s, column %d)", pos[i],
+                    ed->cfg->groups[i].title, tabs[tab_of[i]], col_of[i] + 1);
+        else if (ntabs > 1)
+            sprintf(l, "%d. %s (%s)", pos[i],
+                    ed->cfg->groups[i].title, tabs[tab_of[i]]);
+        else if (ncols > 1)
+            sprintf(l, "%d. %s (column %d)", pos[i],
                     ed->cfg->groups[i].title, col_of[i] + 1);
         else
-            sprintf(l, "%d. %s", i + 1, ed->cfg->groups[i].title);
+            sprintf(l, "%d. %s", pos[i], ed->cfg->groups[i].title);
         ed->group_titles[i] = l;
     }
     if (ed->cfg->ngroups == 0)
@@ -421,6 +560,49 @@ static void refresh_groups(a2h_editor *ed)
                  MUIA_NoNotify,     TRUE,
                  MUIA_Cycle_Active, (IPTR)want,
                  TAG_DONE);
+    }
+
+    /*
+     * The Layout page's list holds only the selected tab's groups, so the
+     * tab name would say nothing; the cycle above keeps it, as it lists
+     * them all. MUI copies each string, so building them in one buffer
+     * is fine.
+     */
+    on_tab = -1;
+    ed->nglist = 0;
+    if (ed->list_groups) {
+        set(ed->list_groups, MUIA_List_Quiet, TRUE);
+        DoMethod(ed->list_groups, MUIM_List_Clear);
+        for (i = 0; i < ed->cfg->ngroups; i++) {
+            char l[GROUP_LABEL_MAX];
+
+            if (tab_of[i] != ed->tab)
+                continue;
+            if (ncols > 1)
+                sprintf(l, "%d. %s (column %d)", pos[i],
+                        ed->cfg->groups[i].title, col_of[i] + 1);
+            else
+                sprintf(l, "%d. %s", pos[i], ed->cfg->groups[i].title);
+            if (i == ed->group)
+                on_tab = ed->nglist;
+            ed->glist_map[ed->nglist++] = i;
+            DoMethod(ed->list_groups, MUIM_List_InsertSingle,
+                     (IPTR)l, MUIV_List_Insert_Bottom);
+        }
+        set(ed->list_groups, MUIA_List_Quiet, FALSE);
+        SetAttrs(ed->list_groups, MUIA_NoNotify, TRUE,
+                 MUIA_List_Active,
+                 (IPTR)(on_tab >= 0 ? on_tab : MUIV_List_Active_Off),
+                 TAG_DONE);
+
+        /* Nothing picked on this tab -- it is empty -- leaves New. */
+        set(ed->bt_gdel,     MUIA_Disabled, on_tab < 0);
+        set(ed->bt_gup,      MUIA_Disabled, on_tab <= 0);
+        set(ed->bt_gdown,    MUIA_Disabled,
+            on_tab < 0 || on_tab >= ed->nglist - 1);
+        set(ed->str_group,   MUIA_Disabled, on_tab < 0);
+        set(ed->cyc_gtab,    MUIA_Disabled, on_tab < 0);
+        set(ed->cyc_gcolumn, MUIA_Disabled, on_tab < 0);
     }
 
     show_group_name(ed);
@@ -603,6 +785,26 @@ static Object *make_list(Object **listp, const char *heading, int draggable)
         TAG_DONE);
 }
 
+static const char *page_titles[] = { "Layout", "Entities", NULL };
+
+/* A plain list of strings, which MUI copies in and frees itself. */
+static Object *make_string_list(Object **listp)
+{
+    Object *list = MUI_NewObject(MUIC_List,
+        MUIA_Frame,              MUIV_Frame_InputList,
+        MUIA_List_ConstructHook, MUIV_List_ConstructHook_String,
+        MUIA_List_DestructHook,  MUIV_List_DestructHook_String,
+        TAG_DONE);
+
+    *listp = list;
+    if (!list)
+        return NULL;
+    return MUI_NewObject(MUIC_Listview,
+        MUIA_Listview_List,  (IPTR)list,
+        MUIA_Listview_Input, TRUE,
+        TAG_DONE);
+}
+
 static Object *make_button(const char *label)
 {
     return MUI_NewObject(MUIC_Text,
@@ -636,6 +838,20 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
         MUIA_String_MaxLen,  (IPTR)CFG_TITLE_MAX,
         MUIA_Weight,         (IPTR)300,
         TAG_DONE);
+    ed->cyc_gtab = MUI_NewObject(MUIC_Cycle,
+        MUIA_Cycle_Entries,  (IPTR)group_column_labels,  /* replaced on show */
+        MUIA_Weight,         (IPTR)200,
+        TAG_DONE);
+    ed->str_tabname = MUI_NewObject(MUIC_String,
+        MUIA_Frame,          MUIV_Frame_String,
+        MUIA_String_MaxLen,  (IPTR)CFG_TITLE_MAX,
+        TAG_DONE);
+    ed->lv_tabs   = make_string_list(&ed->list_tabs);
+    ed->lv_groups = make_string_list(&ed->list_groups);
+    ed->bt_tnew   = make_button("New");
+    ed->bt_tdel   = make_button("Delete");
+    ed->bt_tup    = make_button("Up");
+    ed->bt_tdown  = make_button("Down");
     ed->str_label = MUI_NewObject(MUIC_String,
         MUIA_Frame,          MUIV_Frame_String,
         MUIA_String_MaxLen,  (IPTR)CFG_LABEL_MAX,
@@ -689,10 +905,10 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     ed->bt_up     = make_button("Up");
     ed->bt_down   = make_button("Down");
     ed->bt_remove = make_button("<< Remove");
-    ed->bt_gnew   = make_button("New group");
-    ed->bt_gdel   = make_button("Delete group");
-    ed->bt_gup    = make_button("Move up");
-    ed->bt_gdown  = make_button("Move down");
+    ed->bt_gnew   = make_button("New");
+    ed->bt_gdel   = make_button("Delete");
+    ed->bt_gup    = make_button("Up");
+    ed->bt_gdown  = make_button("Down");
     ed->bt_save   = make_button("Save");
     ed->bt_use    = make_button("Use");
     ed->bt_cancel = make_button("Cancel");
@@ -700,7 +916,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
     ed->lv_pool = make_list(&ed->list_pool, "Available HA entities", 0);
     ed->lv_used = make_list(&ed->list_used, "Selected entities", 1);
 
-    if (!ed->lv_pool || !ed->lv_used || !ed->cyc_group || !ed->cyc_gcolumn) {
+    if (!ed->lv_pool || !ed->lv_used || !ed->cyc_group || !ed->cyc_gcolumn ||
+        !ed->cyc_gtab || !ed->lv_tabs || !ed->lv_groups || !ed->str_tabname) {
         free(ed);
         return NULL;
     }
@@ -715,41 +932,87 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
         MUIA_Window_ID,     (IPTR)(('A' << 24) | ('2' << 16) | ('E' << 8) | '2'),
         MUIA_Window_RootObject, (IPTR)MUI_NewObject(MUIC_Group,
             /*
-             * Two rows. As one, seven gadgets shared the width and MUI
-             * took it out of the name field, which ended up showing the
-             * last letter of the group's name and nothing else. The two
-             * fields people actually read -- which group, and its name --
-             * now get whatever width is going; everything else keeps its
-             * natural size.
+             * Two pages. One window held everything, and it had grown a
+             * row of group controls, a second row, then a tab field --
+             * each fine alone, together a wall of gadgets above the lists.
+             * Where things go (tabs, groups, columns) is now one page, and
+             * what is in a group the other.
              */
+            MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Register,
+                MUIA_Register_Titles, (IPTR)page_titles,
+
+            /* --- Layout --- */
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
-                MUIA_Frame,      MUIV_Frame_Group,
-                MUIA_FrameTitle, (IPTR)"Group",
+                MUIA_Group_Horiz, TRUE,
                 MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
-                    MUIA_Group_Horiz, TRUE,
-                    MUIA_Group_Child, (IPTR)ed->cyc_group,
-                    MUIA_Group_Child, (IPTR)ed->bt_gup,
-                    MUIA_Group_Child, (IPTR)ed->bt_gdown,
-                    MUIA_Group_Child, (IPTR)ed->bt_gnew,
-                    MUIA_Group_Child, (IPTR)ed->bt_gdel,
+                    MUIA_Frame,      MUIV_Frame_Group,
+                    MUIA_FrameTitle, (IPTR)"Tabs",
+                    MUIA_Weight,     (IPTR)100,
+                    MUIA_Group_Child, (IPTR)ed->lv_tabs,
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                        MUIA_Group_Horiz, TRUE,
+                        MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                            MUIA_Text_Contents, (IPTR)"Name:",
+                            MUIA_Weight, (IPTR)0, TAG_DONE),
+                        MUIA_Group_Child, (IPTR)ed->str_tabname,
+                        TAG_DONE),
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                        MUIA_Group_Horiz, TRUE,
+                        MUIA_Group_Child, (IPTR)ed->bt_tnew,
+                        MUIA_Group_Child, (IPTR)ed->bt_tdel,
+                        MUIA_Group_Child, (IPTR)ed->bt_tup,
+                        MUIA_Group_Child, (IPTR)ed->bt_tdown,
+                        TAG_DONE),
+                    /* Dashboard-wide: every page has this many. */
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                        MUIA_Group_Horiz, TRUE,
+                        MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                            MUIA_Text_Contents, (IPTR)"Columns:",
+                            MUIA_Weight, (IPTR)0, TAG_DONE),
+                        MUIA_Group_Child, (IPTR)ed->cyc_columns,
+                        TAG_DONE),
                     TAG_DONE),
                 MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
-                    MUIA_Group_Horiz, TRUE,
-                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                        MUIA_Text_Contents, (IPTR)"Name:",
-                        MUIA_Weight, (IPTR)0, TAG_DONE),
-                    MUIA_Group_Child, (IPTR)ed->str_group,
-                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                        MUIA_Text_Contents, (IPTR)"In column:",
-                        MUIA_Weight, (IPTR)0, TAG_DONE),
-                    MUIA_Group_Child, (IPTR)ed->cyc_gcolumn,
-                    /* Dashboard-wide, but it sits by "In column" because
-                     * the two are read together: column 2 of 3. */
-                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
-                        MUIA_Text_Contents, (IPTR)"Columns:",
-                        MUIA_Weight, (IPTR)0, TAG_DONE),
-                    MUIA_Group_Child, (IPTR)ed->cyc_columns,
+                    MUIA_Frame,      MUIV_Frame_Group,
+                    MUIA_FrameTitle, (IPTR)"Groups",
+                    MUIA_Weight,     (IPTR)200,
+                    MUIA_Group_Child, (IPTR)ed->lv_groups,
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                        MUIA_Group_Horiz, TRUE,
+                        MUIA_Group_Child, (IPTR)ed->bt_gnew,
+                        MUIA_Group_Child, (IPTR)ed->bt_gdel,
+                        MUIA_Group_Child, (IPTR)ed->bt_gup,
+                        MUIA_Group_Child, (IPTR)ed->bt_gdown,
+                        TAG_DONE),
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                        MUIA_Group_Horiz, TRUE,
+                        MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                            MUIA_Text_Contents, (IPTR)"Name:",
+                            MUIA_Weight, (IPTR)0, TAG_DONE),
+                        MUIA_Group_Child, (IPTR)ed->str_group,
+                        TAG_DONE),
+                    MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                        MUIA_Group_Horiz, TRUE,
+                        MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                            MUIA_Text_Contents, (IPTR)"Tab:",
+                            MUIA_Weight, (IPTR)0, TAG_DONE),
+                        MUIA_Group_Child, (IPTR)ed->cyc_gtab,
+                        MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                            MUIA_Text_Contents, (IPTR)"In column:",
+                            MUIA_Weight, (IPTR)0, TAG_DONE),
+                        MUIA_Group_Child, (IPTR)ed->cyc_gcolumn,
+                        TAG_DONE),
                     TAG_DONE),
+                TAG_DONE),
+
+            /* --- Entities --- */
+            MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+            MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
+                MUIA_Group_Horiz, TRUE,
+                MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Text,
+                    MUIA_Text_Contents, (IPTR)"Group:",
+                    MUIA_Weight, (IPTR)0, TAG_DONE),
+                MUIA_Group_Child, (IPTR)ed->cyc_group,
                 TAG_DONE),
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
@@ -821,6 +1084,8 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
                         TAG_DONE),
                     TAG_DONE),
                 TAG_DONE),
+            TAG_DONE),               /* end of the Entities page */
+            TAG_DONE),               /* end of the register      */
             MUIA_Group_Child, (IPTR)MUI_NewObject(MUIC_Group,
                 MUIA_Group_Horiz, TRUE,
                 MUIA_Group_Child, (IPTR)ed->bt_save,
@@ -874,6 +1139,23 @@ a2h_editor *editor_create(Object *app, a2h_config *cfg, ha_client *ha,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_COL);
     DoMethod(ed->cyc_columns, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_COLUMNS);
+    DoMethod(ed->cyc_gtab, MUIM_Notify, MUIA_Cycle_Active, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GROUP_TAB);
+    DoMethod(ed->list_groups, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_GLIST);
+    DoMethod(ed->list_tabs, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_TAB_SEL);
+    DoMethod(ed->str_tabname, MUIM_Notify, MUIA_String_Acknowledge,
+             MUIV_EveryTime, (IPTR)app, 2,
+             MUIM_Application_ReturnID, ID_ED_TAB_RENAME);
+    DoMethod(ed->bt_tnew, MUIM_Notify, MUIA_Pressed, FALSE,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_TAB_NEW);
+    DoMethod(ed->bt_tdel, MUIM_Notify, MUIA_Pressed, FALSE,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_TAB_DEL);
+    DoMethod(ed->bt_tup, MUIM_Notify, MUIA_Pressed, FALSE,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_TAB_UP);
+    DoMethod(ed->bt_tdown, MUIM_Notify, MUIA_Pressed, FALSE,
+             (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_TAB_DN);
     DoMethod(ed->str_label, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
              (IPTR)app, 2, MUIM_Application_ReturnID, ID_ED_LABEL);
     DoMethod(ed->str_min, MUIM_Notify, MUIA_String_Acknowledge, MUIV_EveryTime,
@@ -948,7 +1230,9 @@ void editor_show(a2h_editor *ed)
 
     if (ed->group >= ed->cfg->ngroups)
         ed->group = 0;
+    ed->tab = group_tab(ed, ed->group);
 
+    refresh_tabs(ed);
     refresh_groups(ed);
     refresh_lists(ed);
     set(ed->win, MUIA_Window_Open, TRUE);
@@ -1030,6 +1314,10 @@ static void group_new(a2h_editor *ed)
     cfg->ngroups++;
 
     ed->group = cfg->ngroups - 1;
+    /* On the tab the Layout page is showing, or it would vanish from the
+     * list the moment it was made. */
+    cfg_group_set_tab(cfg, ed->group, ed->tab);
+    refresh_tabs(ed);
     refresh_groups(ed);
     refresh_lists(ed);
 }
@@ -1075,6 +1363,7 @@ static void group_delete(a2h_editor *ed)
 
     if (ed->group >= cfg->ngroups)
         ed->group = cfg->ngroups ? cfg->ngroups - 1 : 0;
+    pick_group_on_tab(ed);
 
     refresh_groups(ed);
     refresh_lists(ed);
@@ -1094,7 +1383,7 @@ static void group_move(a2h_editor *ed, int delta)
 
     apply(ed);   /* bank the list edits against the group as it stands */
 
-    to = cfg_move_group(ed->cfg, ed->group, delta);
+    to = cfg_move_group_in_tab(ed->cfg, ed->group, delta);
     if (to < 0)
         return;
     ed->group = to;
@@ -1423,7 +1712,9 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
         apply(ed);                 /* keep the edits to the group we leave */
         get(ed->cyc_group, MUIA_Cycle_Active, &sel);
         ed->group = (int)sel;
-        show_group_name(ed);
+        ed->tab   = group_tab(ed, ed->group);   /* the Layout page follows */
+        refresh_tabs(ed);
+        refresh_groups(ed);
         refresh_lists(ed);
         break;
     }
@@ -1449,6 +1740,98 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
     case ID_ED_COLUMNS:
         refresh_groups(ed);
         break;
+
+    case ID_ED_GROUP_TAB: {
+        LONG t = 0;
+        get(ed->cyc_gtab, MUIA_Cycle_Active, &t);
+        cfg_group_set_tab(ed->cfg, ed->group, (int)t);
+        /* Follow it, so it stays the one selected rather than vanishing
+         * from the list it was picked in. */
+        ed->tab = (int)t;
+        refresh_tabs(ed);         /* Main may just have become a real tab */
+        refresh_groups(ed);       /* the labels say which tab */
+        break;
+    }
+
+    /* A group picked in the Layout page's list: the same as picking it in
+     * the Entities page's cycle, which follows. */
+    case ID_ED_GLIST: {
+        LONG sel = MUIV_List_Active_Off;
+        get(ed->list_groups, MUIA_List_Active, &sel);
+        if (sel == MUIV_List_Active_Off || sel < 0 || sel >= ed->nglist ||
+            ed->glist_map[sel] == ed->group)
+            break;
+        apply(ed);                /* keep the edits to the group we leave */
+        ed->group = ed->glist_map[sel];
+        /* Moves, and the buttons that depend on the place, follow. */
+        refresh_groups(ed);
+        refresh_lists(ed);
+        break;
+    }
+
+    case ID_ED_TAB_SEL: {
+        LONG sel = MUIV_List_Active_Off;
+        get(ed->list_tabs, MUIA_List_Active, &sel);
+        if (sel == MUIV_List_Active_Off)
+            break;
+        if (sel == ed->tab)
+            break;
+        ed->tab = (int)sel;
+        SetAttrs(ed->str_tabname, MUIA_NoNotify, TRUE,
+                 MUIA_String_Contents, (IPTR)ed->tab_titles[ed->tab],
+                 TAG_DONE);
+        /* The Groups list shows this tab's groups, and the one edited
+         * becomes one of them. */
+        apply(ed);
+        if (pick_group_on_tab(ed)) {
+            refresh_tabs(ed);     /* the Tab cycle shows the new group's */
+            refresh_lists(ed);
+        }
+        refresh_groups(ed);
+        break;
+    }
+
+    case ID_ED_TAB_RENAME: {
+        STRPTR text = NULL;
+        get(ed->str_tabname, MUIA_String_Contents, &text);
+        /* A refused name -- empty, or another tab's -- puts the old one
+         * back in the field rather than leaving the field lying. */
+        cfg_tab_rename(ed->cfg, ed->tab, text ? (const char *)text : "");
+        refresh_tabs(ed);
+        refresh_groups(ed);
+        break;
+    }
+
+    case ID_ED_TAB_NEW:
+        tab_new(ed);
+        refresh_tabs(ed);
+        refresh_groups(ed);
+        /* Straight into the name, which is the next thing anyone does. */
+        set(ed->win, MUIA_Window_ActiveObject, (IPTR)ed->str_tabname);
+        break;
+
+    case ID_ED_TAB_DEL:
+        apply(ed);
+        if (cfg_tab_delete(ed->cfg, ed->tab)) {
+            if (ed->tab > 0)
+                ed->tab--;
+            if (pick_group_on_tab(ed))
+                refresh_lists(ed);
+            refresh_tabs(ed);
+            refresh_groups(ed);
+        }
+        break;
+
+    case ID_ED_TAB_UP:
+    case ID_ED_TAB_DN: {
+        int delta = (id == ID_ED_TAB_UP) ? -1 : 1;
+        if (cfg_tab_move(ed->cfg, ed->tab, delta)) {
+            ed->tab += delta;
+            refresh_tabs(ed);
+            refresh_groups(ed);
+        }
+        break;
+    }
 
     case ID_ED_GROUP_UP:
         group_move(ed, -1);
@@ -1497,6 +1880,8 @@ int editor_handle(a2h_editor *ed, unsigned long id, int *relayout)
             ed->cfg->widget_cap = ed->backup.widget_cap;
             memcpy(ed->cfg->groups, ed->backup.groups, sizeof ed->cfg->groups);
             ed->cfg->ngroups    = ed->backup.ngroups;
+            memcpy(ed->cfg->tabs, ed->backup.tabs, sizeof ed->cfg->tabs);
+            ed->cfg->ntabs      = ed->backup.ntabs;
             ed->backup.widgets  = NULL;
         }
         set(ed->win, MUIA_Window_Open, FALSE);
