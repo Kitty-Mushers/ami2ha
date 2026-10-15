@@ -581,9 +581,25 @@ static int build_widget(a2h_ui *ui, int index, Object *parent)
          * Disabled to start: an off lamp reports no colour, and a control
          * that invented one would send it the moment the window opened --
          * which it did, once, turning a lamp on at full white.
+         *
+         * In a row it gets a box of its own size. The wheel fills whatever
+         * it is given, and left to the row it got the height of the three
+         * R/G/B lines and the width of the column: a flat ellipse in a wide
+         * column, a sliver in a narrow one. Fourteen lines by sixteen M's
+         * leaves a wheel of about 50 pixels -- a row some 25 pixels taller
+         * than the squashed one, and a wheel big enough to aim at; 35
+         * pixels cost ten but was fiddly. Measured in text, so it scales
+         * with the font, but only near round: lines and M's keep different
+         * proportions in different fonts (49x51 on the 4000T, 57x51 on the
+         * Pi). Exactly round would mean sizing it at layout time in a
+         * subclass. The window on a scrolling dashboard sizes it there.
          */
         uw->control = MUI_NewObject(MUIC_Coloradjust,
             MUIA_Disabled, TRUE,
+            ui->scrolled ? TAG_IGNORE : MUIA_FixHeightTxt,
+                (IPTR)"\n\n\n\n\n\n\n\n\n\n\n\n\n",
+            ui->scrolled ? TAG_IGNORE : MUIA_FixWidthTxt,
+                (IPTR)"MMMMMMMMMMMMMMMM",
             TAG_DONE);
         uw->onoff  = make_onoff();
         if (!uw->control || !uw->onoff)
