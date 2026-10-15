@@ -5,7 +5,7 @@ Type:         comm/tcp
 Version:      @VERSION@
 Architecture: m68k-amigaos
 Distribution: Aminet
-Replaces:     comm/tcp/ami2ha-0.3.1.lha
+Replaces:     comm/tcp/ami2ha-0.4.lha
 Requires:     bsdsocket.library; MUI 3.8+; AmiSSL for https; JPEG dt for cams
 
 
@@ -29,13 +29,21 @@ WHAT IT DOES
     colour wheel and a plain bulb stays a checkmark
   - camera snapshots as tiles, fetched on a click or on a timer, scaled
     by the server so a 68k only has a small picture to decode, and
-    saveable to disk under the name you gave the tile
+    saveable to disk under the name you gave the tile -- or saved larger
+    than the tile, at a size you choose (1280x720 unless you say
+    otherwise), for sending on to people with smaller screens
   - media players: what is playing -- title, artist, station and volume
     -- over buttons for previous, play/pause, next and volume
   - pick which entities appear by giving them a label in Home Assistant,
     so you can change what the Amiga shows without touching the Amiga
-  - a settings window for grouping, ordering, labelling and choosing how
-    each entity is displayed
+  - groups side by side in columns, each column only as tall as what is
+    in it, and tabs when one page is not enough: a few groups on the
+    start page, the rest a click away
+  - a settings window with a Layout page -- tabs, columns, and each
+    tab's groups in order -- and an Entities page for what each group
+    shows, its labels and how each entity is displayed
+  - labelled something new in Home Assistant? Refresh entities picks it
+    up without a restart
   - a dashboard bigger than the screen scrolls, so labelling generously
     works on a small Workbench instead of failing to open
   - an ARexx port (AMI2HA): GET, ATTR, LIST, TOGGLE, ON, OFF, CALL,

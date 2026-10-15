@@ -59,7 +59,12 @@ can be shared, and it is the only option if someone is pointing an Amiga at
 a Home Assistant they do not administer. Server-side selection is better as
 an additional source, not a replacement.
 
-## Settings window: the group order as a visible list
+## Settings window: the group order as a visible list -- IMPLEMENTED
+
+Built in 0.5: the settings window's Layout page lists the selected tab's
+groups in order, numbered, beside the list of tabs. What follows is the
+original note.
+
 
 Groups are reordered with Move up / Move down beside the Group cycle, and
 the cycle's entries carry each group's position and column ("3. Claude
@@ -71,3 +76,16 @@ groups, always visible, with the selected one highlighted -- the order and
 the columns at a glance, and possibly drag to reorder. The cost is height
 in a window that already needs most of the screen for the two entity
 lists, which is why it was not done first.
+
+## A colour wheel that is exactly round
+
+On the dashboard the colour control is given a box measured in text --
+fourteen lines by sixteen M's -- so the wheel inside comes out about 50
+pixels across. It is near round rather than round, because lines and M's
+keep different proportions in different fonts: 49x51 on the 4000T, 57x51
+on the Pi (Oct 2026).
+
+Exact would mean a small subclass of Coloradjust that sizes itself in
+MUIM_AskMinMax, once the font is known, working out how much of its width
+and height are the wheel. It would be ami2ha's first custom MUI class,
+which is why it waited until after 0.5.
